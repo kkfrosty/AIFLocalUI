@@ -1,5 +1,7 @@
 ﻿using System.Text;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 using AiFoundryUI.Models;
 using AiFoundryUI.Services;
 
@@ -46,6 +48,46 @@ public partial class MainWindow : Window
         _monitor.Start();
 
         _ = LoadModelsOnStartupAsync();
+        
+        // Setup temperature slider value display
+        SldTemp.ValueChanged += (s, e) => LblTemp.Text = $"{e.NewValue:0.0}";
+    }
+
+    // Event handlers for new UI elements
+    private void TxtPrompt_GotFocus(object sender, RoutedEventArgs e)
+    {
+        if (TxtPrompt.Text == "Type your message here..." && TxtPrompt.Foreground.ToString() == "#FF9CA3AF")
+        {
+            TxtPrompt.Text = "";
+            TxtPrompt.Foreground = System.Windows.Media.Brushes.Black;
+        }
+    }
+
+    private void TxtPrompt_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(TxtPrompt.Text))
+        {
+            TxtPrompt.Text = "Type your message here...";
+            TxtPrompt.Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(156, 163, 175));
+        }
+    }
+
+    private void TxtPrompt_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Enter && !e.KeyboardDevice.Modifiers.HasFlag(System.Windows.Input.ModifierKeys.Shift))
+        {
+            e.Handled = true;
+            BtnSend_Click(sender, e);
+        }
+    }
+
+    private void CmbModels_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        // Auto-hide welcome panel when model is selected
+        if (CmbModels.SelectedItem != null)
+        {
+            WelcomePanel.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void OnProcessOutput(string output)
@@ -57,7 +99,111 @@ public partial class MainWindow : Window
             _foundryClient.SetBaseUrl(serviceUrl);
             // Update chat client's API base
             _config.ApiBase = serviceUrl + "/v1";
+            
+            // Display the service URL in the UI
+            Dispatcher.Invoke(() =>
+            {
+                TxtServiceUrl.Text = $"Service: {serviceUrl}";
+                UpdateStatus("Service running");
+            });
         }
+
+        // Parse and display meaningful progress information
+        ParseAndDisplayProgress(output);
+    }
+
+    private void ParseAndDisplayProgress(string output)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            // Extract percentage first - it might be present in any type of message
+            var percent = ExtractProgressPercent(output);
+            
+            // Check for download progress patterns
+            if (output.Contains("Downloading") || output.Contains("downloading"))
+            {
+                ShowProgress("Downloading model...", percent);
+            }
+            else if (output.Contains("Loading") || output.Contains("loading"))
+            {
+                ShowProgress("Loading model...", percent);
+            }
+            else if (output.Contains("Starting") || output.Contains("starting"))
+            {
+                ShowProgress("Starting model...", percent);
+            }
+            else if (output.Contains("Ready") || output.Contains("ready") || output.Contains("started"))
+            {
+                ShowProgress("Model ready", 100);
+                // Hide progress after a brief delay
+                _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
+            }
+            else if (output.Contains("Error") || output.Contains("error") || output.Contains("failed"))
+            {
+                ShowProgress("Error occurred", null);
+                _ = Task.Delay(3000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
+            }
+            else if (percent.HasValue && ProgressPanel.Visibility == Visibility.Visible)
+            {
+                // If we're already showing progress and we get a percentage update, just update the progress
+                UpdateProgressPercent(percent.Value);
+            }
+        });
+    }
+
+    private int? ExtractProgressPercent(string output)
+    {
+        // Look for percentage patterns like "45%", "75.5%", etc.
+        var regex = new System.Text.RegularExpressions.Regex(@"(\d+(?:\.\d+)?)%");
+        var match = regex.Match(output);
+        if (match.Success && double.TryParse(match.Groups[1].Value, out double percent))
+        {
+            return (int)Math.Round(percent);
+        }
+        return null;
+    }
+
+    private void UpdateProgressPercent(int percent)
+    {
+        if (ProgressPanel.Visibility == Visibility.Visible)
+        {
+            PbProgress.Value = percent;
+            LblProgressPercent.Text = $"{percent}%";
+            PbProgress.IsIndeterminate = false;
+            PbProgress.Visibility = Visibility.Visible;
+            LblProgressPercent.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void ShowProgress(string message, int? percent)
+    {
+        System.Diagnostics.Debug.WriteLine($"[ShowProgress] Message: {message}, Percent: {percent}");
+        ProgressPanel.Visibility = Visibility.Visible;
+        LblProgressStatus.Text = message;
+        
+        if (percent.HasValue)
+        {
+            PbProgress.IsIndeterminate = false;
+            PbProgress.Value = percent.Value;
+            LblProgressPercent.Text = $"{percent}%";
+            PbProgress.Visibility = Visibility.Visible;
+            LblProgressPercent.Visibility = Visibility.Visible;
+            System.Diagnostics.Debug.WriteLine($"[ShowProgress] Set progress to {percent}% - Progress bar value: {PbProgress.Value}");
+        }
+        else
+        {
+            PbProgress.IsIndeterminate = true;
+            LblProgressPercent.Text = "";
+            PbProgress.Visibility = Visibility.Visible;
+            LblProgressPercent.Visibility = Visibility.Collapsed;
+            System.Diagnostics.Debug.WriteLine($"[ShowProgress] Set indeterminate progress");
+        }
+    }
+
+    private void HideProgress()
+    {
+        ProgressPanel.Visibility = Visibility.Collapsed;
+        PbProgress.IsIndeterminate = false;
     }
 
     private async Task LoadModelsOnStartupAsync()
@@ -93,12 +239,23 @@ public partial class MainWindow : Window
 
     private void Log(string msg)
     {
-        Dispatcher.Invoke(() =>
+        // For the new clean UI, we'll only show important status updates
+        // Verbose logs are no longer displayed in the UI
+        System.Diagnostics.Debug.WriteLine($"[AI Foundry] {msg}");
+        
+        // Show only important status messages in the status area
+        if (msg.Contains("[error]"))
         {
-            TxtLogs.AppendText(msg + Environment.NewLine);
-            TxtLogs.CaretIndex = TxtLogs.Text.Length;
-            TxtLogs.ScrollToEnd();
-        });
+            UpdateStatus("Error occurred");
+        }
+        else if (msg.Contains("Starting"))
+        {
+            UpdateStatus("Starting model...");
+        }
+        else if (msg.Contains("models"))
+        {
+            // Don't spam status with model loading details
+        }
     }
 
     private async Task InitialProbeAsync()
@@ -135,28 +292,59 @@ public partial class MainWindow : Window
             MessageBox.Show("Select a model first.", "Missing model");
             return;
         }
-        _proc.Start(_config, selectedModel);
+
+        // Clear previous service URL
+        TxtServiceUrl.Text = "";
+        
+        // Show initial progress
+        ShowProgress($"Starting {selectedModel}...", null);
         UpdateStatus("Starting...");
-        for (int i = 0; i < 20; i++)
+        
+        _proc.Start(_config, selectedModel);
+        
+        // Wait longer for service to start and URL to be detected
+        for (int i = 0; i < 60; i++) // Increased from 20 to 60 seconds
         {
-            if (await _chat.HealthOkAsync())
-            {
-                UpdateStatus("Running");
-                LblHealth.Text = "Health: OK";
-                await RefreshModelsAsync();
-                return;
-            }
+            // Wait a bit for service URL to be extracted from output
             await Task.Delay(1000);
+            
+            // Only check health if we have a service URL
+            if (!string.IsNullOrWhiteSpace(_config.ApiBase))
+            {
+                try
+                {
+                    if (await _chat.HealthOkAsync())
+                    {
+                        UpdateStatus("Running");
+                        LblHealth.Text = "Health: OK";
+                        ShowProgress("Model ready", 100);
+                        await RefreshModelsAsync();
+                        
+                        // Hide progress after showing "ready" briefly
+                        _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Log but continue waiting
+                    Log($"[debug] Health check attempt {i}: {ex.Message}");
+                }
+            }
         }
-        UpdateStatus("No health/timeout");
+        UpdateStatus("Startup timeout");
         LblHealth.Text = "Health: timeout";
+        ShowProgress("Startup timeout - check service URL", null);
+        _ = Task.Delay(5000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
     }
 
     private void BtnStop_Click(object sender, RoutedEventArgs e)
     {
         _proc.Stop(_config);
         UpdateStatus("Stopped");
+        TxtServiceUrl.Text = "";
         LblHealth.Text = "";
+        HideProgress();
     }
 
     private async void BtnRefreshModels_Click(object sender, RoutedEventArgs e)
@@ -234,10 +422,49 @@ public partial class MainWindow : Window
 
     private void AppendChat(string who, string text)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine($"{who}: {text}");
-        sb.AppendLine();
-        TxtChat.Text += sb.ToString();
+        Dispatcher.Invoke(() =>
+        {
+            // Hide welcome panel when first message appears
+            WelcomePanel.Visibility = Visibility.Collapsed;
+            
+            // Create a new message bubble
+            var messagePanel = new StackPanel
+            {
+                Margin = new Thickness(0, 0, 0, 16),
+                HorizontalAlignment = who == "You" ? HorizontalAlignment.Right : HorizontalAlignment.Left
+            };
+
+            // Add sender label
+            var senderLabel = new TextBlock
+            {
+                Text = who,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 4),
+                Foreground = new System.Windows.Media.SolidColorBrush(
+                    who == "You" ? System.Windows.Media.Color.FromRgb(59, 130, 246) : System.Windows.Media.Color.FromRgb(16, 185, 129)),
+                FontSize = 12
+            };
+
+            // Add message content
+            var messageText = new TextBlock
+            {
+                Text = text,
+                TextWrapping = TextWrapping.Wrap,
+                Background = new System.Windows.Media.SolidColorBrush(
+                    who == "You" ? System.Windows.Media.Color.FromRgb(59, 130, 246) : System.Windows.Media.Color.FromRgb(243, 244, 246)),
+                Foreground = new System.Windows.Media.SolidColorBrush(
+                    who == "You" ? System.Windows.Media.Colors.White : System.Windows.Media.Colors.Black),
+                Padding = new Thickness(12, 8, 12, 8),
+                MaxWidth = 500
+            };
+
+            messagePanel.Children.Add(senderLabel);
+            messagePanel.Children.Add(messageText);
+            ChatMessages.Children.Add(messagePanel);
+
+            // Auto-scroll to bottom
+            ChatScrollViewer.ScrollToBottom();
+        });
     }
 
     private void BtnOpenConfig_Click(object sender, RoutedEventArgs e)

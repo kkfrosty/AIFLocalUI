@@ -5,91 +5,183 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:AiFoundryUI"
         mc:Ignorable="d"
-        Title="AI Foundry Local - .NET UI" Height="700" Width="1100">
-    <Grid>
+        Title="AI Foundry Local" Height="800" Width="1000" WindowStartupLocation="CenterScreen">
+    <Grid Background="#F8F9FA">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Top toolbar -->
-        <DockPanel Grid.Row="0" Margin="8">
-            <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" Margin="0,0,12,0">
-                <Button x:Name="BtnStart" Content="Start Service" Width="120" Margin="0,0,6,0" Click="BtnStart_Click"/>
-                <Button x:Name="BtnStop" Content="Stop Service" Width="120" Margin="0,0,6,0" Click="BtnStop_Click"/>
-                <Button x:Name="BtnRefreshModels" Content="Refresh Models" Width="130" Margin="0,0,6,0" Click="BtnRefreshModels_Click"/>
-                <Button x:Name="BtnOpenConfig" Content="Open Config" Width="110" Margin="0,0,6,0" Click="BtnOpenConfig_Click"/>
+        <!-- Simple top bar with permanent branding and status -->
+        <Border Grid.Row="0" Background="White" BorderBrush="#E1E5E9" BorderThickness="0,0,0,1" Padding="20,12">
+            <DockPanel>
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" VerticalAlignment="Center">
+                    <TextBlock Text="🤖" FontSize="20" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <TextBlock Text="AI Foundry Local" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+                    <Button x:Name="BtnRefreshModels" Content="⟳" ToolTip="Refresh Models" Width="32" Height="32" Margin="0,0,8,0" Click="BtnRefreshModels_Click" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"/>
+                    <Button x:Name="BtnOpenConfig" Content="⚙" ToolTip="Settings" Width="32" Height="32" Click="BtnOpenConfig_Click" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"/>
+                </StackPanel>
+                <StackPanel Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock x:Name="TxtStatus" Text="Ready" Foreground="#6B7280" FontWeight="Medium" HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="TxtServiceUrl" Text="" Foreground="#3B82F6" FontSize="12" HorizontalAlignment="Center" Margin="0,2,0,0"/>
+                    <ProgressBar x:Name="PbModelLoading" Width="200" Height="4" Margin="0,4,0,0" Visibility="Collapsed"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- Main chat area -->
+        <Grid Grid.Row="1" Margin="0">
+            <ScrollViewer x:Name="ChatScrollViewer" VerticalScrollBarVisibility="Auto" Padding="20" Background="White">
+                <StackPanel x:Name="ChatMessages" />
+            </ScrollViewer>
+            
+            <!-- Welcome/empty state -->
+            <StackPanel x:Name="WelcomePanel" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Visible">
+                <TextBlock Text="Welcome" FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                <TextBlock Text="Select a model below to start chatting" Foreground="#6B7280" HorizontalAlignment="Center"/>
             </StackPanel>
-
-            <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" VerticalAlignment="Center">
-                <TextBlock Text="Model:" VerticalAlignment="Center" Margin="6,0"/>
-                <ComboBox x:Name="CmbModels" Width="260" Margin="6,0" />
-                <Button x:Name="BtnSelectModel" Content="Select" Width="80" Margin="6,0" Click="BtnSelectModel_Click"/>
-                <TextBlock Text="Temp:" VerticalAlignment="Center" Margin="16,0,4,0"/>
-                <Slider x:Name="SldTemp" Minimum="0" Maximum="1" Value="0.7" Width="140"/>
-            </StackPanel>
-
-            <TextBlock x:Name="TxtStatus" Text="Idle" Foreground="Gray" HorizontalAlignment="Right" DockPanel.Dock="Right" VerticalAlignment="Center"/>
-        </DockPanel>
-
-        <!-- Main split -->
-        <Grid Grid.Row="1" Margin="8">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="3*"/>
-                <ColumnDefinition Width="2*"/>
-            </Grid.ColumnDefinitions>
-
-            <!-- Chat panel -->
-            <Grid Grid.Column="0">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-
-                <ScrollViewer VerticalScrollBarVisibility="Auto" Grid.Row="0" Margin="0,0,8,8">
-                    <TextBlock x:Name="TxtChat" TextWrapping="Wrap" FontFamily="Consolas" />
-                </ScrollViewer>
-
-                <DockPanel Grid.Row="1">
-                    <TextBox x:Name="TxtPrompt" AcceptsReturn="True" Height="90" VerticalScrollBarVisibility="Auto" DockPanel.Dock="Left" TextWrapping="Wrap" />
-                    <Button x:Name="BtnSend" Content="Send" Width="90" Margin="8,0,0,0" Click="BtnSend_Click"/>
-                </DockPanel>
-            </Grid>
-
-            <!-- Logs panel -->
-            <Grid Grid.Column="1">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-                <TextBlock Text="Service Logs" FontWeight="Bold" Margin="0,0,0,6"/>
-                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                    <TextBox x:Name="TxtLogs" FontFamily="Consolas" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"/>
-                </ScrollViewer>
-            </Grid>
         </Grid>
 
-        <!-- Status bar with system metrics -->
-        <StatusBar Grid.Row="2">
+        <!-- Chat input area -->
+        <Border Grid.Row="2" Background="White" BorderBrush="#E1E5E9" BorderThickness="0,1,0,0" Padding="20,16">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                
+                <Border Grid.Column="0" Background="#F9FAFB" BorderBrush="#D1D5DB" BorderThickness="1" CornerRadius="8" Padding="12">
+                    <TextBox x:Name="TxtPrompt" 
+                             Background="Transparent" 
+                             BorderThickness="0" 
+                             TextWrapping="Wrap" 
+                             AcceptsReturn="True"
+                             MaxHeight="120"
+                             VerticalScrollBarVisibility="Auto"
+                             Text="Type your message here..." 
+                             Foreground="#9CA3AF"
+                             GotFocus="TxtPrompt_GotFocus"
+                             LostFocus="TxtPrompt_LostFocus"
+                             KeyDown="TxtPrompt_KeyDown"/>
+                </Border>
+                
+                <Button x:Name="BtnSend" 
+                        Grid.Column="1" 
+                        Content="Send" 
+                        Background="#3B82F6" 
+                        Foreground="White" 
+                        BorderThickness="0" 
+                        Padding="20,12" 
+                        Margin="12,0,0,0" 
+                        FontWeight="Medium"
+                        Click="BtnSend_Click"/>
+            </Grid>
+        </Border>
+
+        <!-- Model selector (like Azure ChatPlayground) -->
+        <Border Grid.Row="3" Background="#F8F9FA" BorderBrush="#E1E5E9" BorderThickness="0,1,0,0" Padding="20,16">
+            <StackPanel>
+                <!-- Model controls row -->
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,12">
+                    <TextBlock Text="Model:" FontWeight="Medium" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                    <ComboBox x:Name="CmbModels" 
+                              Width="280" 
+                              Margin="0,0,16,0" 
+                              Padding="8,6"
+                              SelectionChanged="CmbModels_SelectionChanged"/>
+                    <Button x:Name="BtnStart" 
+                            Content="Start" 
+                            Background="#10B981" 
+                            Foreground="White" 
+                            BorderThickness="0" 
+                            Padding="16,6" 
+                            Margin="0,0,8,0"
+                            Click="BtnStart_Click"/>
+                    <Button x:Name="BtnStop" 
+                            Content="Stop" 
+                            Background="#EF4444" 
+                            Foreground="White" 
+                            BorderThickness="0" 
+                            Padding="16,6" 
+                            Margin="0,0,16,0"
+                            Click="BtnStop_Click"/>
+                    
+                    <StackPanel Orientation="Horizontal" Margin="16,0,0,0">
+                        <TextBlock Text="Temperature:" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" Foreground="#6B7280"/>
+                        <Slider x:Name="SldTemp" 
+                                Minimum="0" 
+                                Maximum="1" 
+                                Value="0.7" 
+                                Width="100" 
+                                VerticalAlignment="Center"/>
+                        <TextBlock x:Name="LblTemp" 
+                                   Text="0.7" 
+                                   VerticalAlignment="Center" 
+                                   Margin="8,0,0,0" 
+                                   FontSize="12" 
+                                   Foreground="#6B7280"
+                                   Width="30"/>
+                    </StackPanel>
+                </StackPanel>
+                
+                <!-- Progress/Status row -->
+                <StackPanel x:Name="ProgressPanel" Orientation="Horizontal" VerticalAlignment="Center" Visibility="Collapsed">
+                    <TextBlock x:Name="LblProgressStatus" 
+                               Text="Starting model..." 
+                               FontSize="13" 
+                               Foreground="#6B7280" 
+                               VerticalAlignment="Center" 
+                               Margin="0,0,12,0"/>
+                    <ProgressBar x:Name="PbProgress" 
+                                 Width="200" 
+                                 Height="6" 
+                                 Minimum="0" 
+                                 Maximum="100" 
+                                 VerticalAlignment="Center"
+                                 Margin="0,0,8,0"/>
+                    <TextBlock x:Name="LblProgressPercent" 
+                               Text="" 
+                               FontSize="12" 
+                               Foreground="#6B7280" 
+                               VerticalAlignment="Center" 
+                               Width="40"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- System metrics status bar -->
+        <StatusBar Grid.Row="4" Background="#F8F9FA" BorderBrush="#E1E5E9" BorderThickness="0,1,0,0" Padding="20,8">
             <StatusBarItem>
                 <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="CPU:" Margin="0,0,4,0"/>
-                    <ProgressBar x:Name="PbCpu" Width="120" Height="14" Minimum="0" Maximum="100"/>
-                    <TextBlock x:Name="LblCpu" Margin="6,0,12,0"/>
-                    <TextBlock Text="Mem:" Margin="0,0,4,0"/>
-                    <ProgressBar x:Name="PbMem" Width="120" Height="14" Minimum="0" Maximum="100"/>
-                    <TextBlock x:Name="LblMem" Margin="6,0,12,0"/>
-                    <TextBlock Text="Disk:" Margin="0,0,4,0"/>
-                    <ProgressBar x:Name="PbDisk" Width="120" Height="14" Minimum="0" Maximum="100"/>
-                    <TextBlock x:Name="LblDisk" Margin="6,0,12,0"/>
-                    <TextBlock Text="GPU:" Margin="0,0,4,0"/>
-                    <ProgressBar x:Name="PbGpu" Width="120" Height="14" Minimum="0" Maximum="100"/>
-                    <TextBlock x:Name="LblGpu" Margin="6,0,12,0"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,24,0">
+                        <TextBlock Text="CPU" Margin="0,0,6,0" FontSize="11" Foreground="#6B7280"/>
+                        <ProgressBar x:Name="PbCpu" Width="60" Height="8" Minimum="0" Maximum="100"/>
+                        <TextBlock x:Name="LblCpu" Margin="6,0,0,0" FontSize="11" Foreground="#6B7280" Width="35"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,24,0">
+                        <TextBlock Text="Memory" Margin="0,0,6,0" FontSize="11" Foreground="#6B7280"/>
+                        <ProgressBar x:Name="PbMem" Width="60" Height="8" Minimum="0" Maximum="100"/>
+                        <TextBlock x:Name="LblMem" Margin="6,0,0,0" FontSize="11" Foreground="#6B7280" Width="35"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,24,0">
+                        <TextBlock Text="Disk" Margin="0,0,6,0" FontSize="11" Foreground="#6B7280"/>
+                        <ProgressBar x:Name="PbDisk" Width="60" Height="8" Minimum="0" Maximum="100"/>
+                        <TextBlock x:Name="LblDisk" Margin="6,0,0,0" FontSize="11" Foreground="#6B7280" Width="35"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="GPU" Margin="0,0,6,0" FontSize="11" Foreground="#6B7280"/>
+                        <ProgressBar x:Name="PbGpu" Width="60" Height="8" Minimum="0" Maximum="100"/>
+                        <TextBlock x:Name="LblGpu" Margin="6,0,0,0" FontSize="11" Foreground="#6B7280" Width="35"/>
+                    </StackPanel>
                 </StackPanel>
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
-                <TextBlock x:Name="LblHealth" Foreground="Gray" />
+                <TextBlock x:Name="LblHealth" Foreground="#6B7280" FontSize="11"/>
             </StatusBarItem>
         </StatusBar>
     </Grid>
