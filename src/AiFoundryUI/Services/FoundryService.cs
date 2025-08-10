@@ -1,0 +1,283 @@
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+
+namespace AiFoundryUI.Services;
+
+public class FoundryService
+{
+    private readonly Action<string> _log;
+
+    public FoundryService(Action<string> log)
+    {
+        _log = log;
+    }
+
+    private void DebugLog(string message)
+    {
+        var logMessage = $"[FoundryService] {message}";
+        Console.WriteLine(logMessage);
+        _log(logMessage);
+    }
+
+    private async Task<(int exitCode, string output, string error)> RunFoundryCommandAsync(string command)
+    {
+        DebugLog($"Executing: foundry {command}");
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-ExecutionPolicy");
+        psi.ArgumentList.Add("Bypass");
+        psi.ArgumentList.Add("-Command");
+        psi.ArgumentList.Add($"foundry {command}");
+
+        try
+        {
+            var process = Process.Start(psi)!;
+            var output = await process.StandardOutput.ReadToEndAsync();
+            var error = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            DebugLog($"Exit code: {process.ExitCode}");
+            if (!string.IsNullOrWhiteSpace(output))
+                DebugLog($"STDOUT: {output}");
+            if (!string.IsNullOrWhiteSpace(error))
+                DebugLog($"STDERR: {error}");
+
+            return (process.ExitCode, output, error);
+        }
+        catch (Exception ex)
+        {
+            DebugLog($"Exception: {ex}");
+            return (-1, "", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Check if foundry service is running. Returns (isRunning, serviceUrl)
+    /// </summary>
+    public async Task<(bool isRunning, string? serviceUrl)> GetServiceStatusAsync()
+    {
+        var (exitCode, output, error) = await RunFoundryCommandAsync("service status");
+        
+        if (exitCode == 0)
+        {
+            // Check for either pattern:
+            // "Service is Started on http://127.0.0.1:51075/, PID 31784!"
+            // "Model management service is running on http://127.0.0.1:54962/openai/status"
+            if (output.Contains("Service is Started on") || output.Contains("service is running on"))
+            {
+                // Extract URL - handle both patterns
+                var match = Regex.Match(output, @"(?:Service is Started on|service is running on) (http://[^/\s,]+)");
+                if (match.Success)
+                {
+                    var url = match.Groups[1].Value;
+                    DebugLog($"Service is running at: {url}");
+                    return (true, url);
+                }
+            }
+        }
+
+        DebugLog("Service is not running");
+        return (false, null);
+    }
+
+    /// <summary>
+    /// Start the foundry service. Returns the service URL if successful.
+    /// </summary>
+    public async Task<string?> StartServiceAsync()
+    {
+        DebugLog("Starting foundry service...");
+        var (exitCode, output, error) = await RunFoundryCommandAsync("service start");
+        
+        if (exitCode == 0)
+        {
+            // Handle both cases:
+            // "Service is Started on http://127.0.0.1:51075/, PID 31784!"
+            // "Service is already running on http://127.0.0.1:54962/."
+            if (output.Contains("Service is Started on") || output.Contains("Service is already running on"))
+            {
+                var match = Regex.Match(output, @"(?:Service is Started on|Service is already running on) (http://[^/\s,]+)");
+                if (match.Success)
+                {
+                    var url = match.Groups[1].Value;
+                    DebugLog($"Service running at: {url}");
+                    return url;
+                }
+            }
+        }
+
+        DebugLog($"Failed to start service. Exit code: {exitCode}, Error: {error}");
+        return null;
+    }
+
+    /// <summary>
+    /// Get list of all available model aliases (both cached and downloadable)
+    /// </summary>
+    public async Task<List<string>> GetAvailableModelsAsync()
+    {
+        var (exitCode, output, error) = await RunFoundryCommandAsync("model list");
+        
+        if (exitCode != 0)
+        {
+            DebugLog($"Failed to get model list. Exit code: {exitCode}");
+            return new List<string>();
+        }
+
+        var aliases = new HashSet<string>();
+        var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        
+        bool inTable = false;
+        foreach (var line in lines)
+        {
+            if (line.Contains("Alias") && line.Contains("Device") && line.Contains("Task"))
+            {
+                inTable = true;
+                continue;
+            }
+            if (line.Contains("---") || !inTable)
+                continue;
+            
+            var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length > 0 && !string.IsNullOrWhiteSpace(parts[0]))
+            {
+                var alias = parts[0].Trim();
+                if (!alias.Contains("GPU") && !alias.Contains("CPU") && 
+                    !alias.Contains("chat-completion") && !alias.Contains("GB"))
+                {
+                    aliases.Add(alias);
+                }
+            }
+        }
+        
+        var result = aliases.OrderBy(a => a).ToList();
+        DebugLog($"Found {result.Count} available model aliases");
+        return result;
+    }
+
+    /// <summary>
+    /// Get list of cached models
+    /// </summary>
+    public async Task<List<string>> GetCachedModelsAsync()
+    {
+        var (exitCode, output, error) = await RunFoundryCommandAsync("cache list");
+        
+        if (exitCode != 0)
+        {
+            DebugLog($"Failed to get cache list. Exit code: {exitCode}");
+            return new List<string>();
+        }
+
+        var cachedModels = new List<string>();
+        var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        
+        foreach (var line in lines)
+        {
+            if (line.Contains("💾"))
+            {
+                // Extract alias from line like: "💾 phi-4-mini                    Phi-4-mini-instruct-cuda-gpu"
+                var match = Regex.Match(line, @"💾\s+([^\s]+)");
+                if (match.Success)
+                {
+                    cachedModels.Add(match.Groups[1].Value);
+                }
+            }
+        }
+        
+        DebugLog($"Found {cachedModels.Count} cached models: {string.Join(", ", cachedModels)}");
+        return cachedModels;
+    }
+
+    /// <summary>
+    /// Check if a specific model is cached
+    /// </summary>
+    public async Task<bool> IsModelCachedAsync(string modelAlias)
+    {
+        var cachedModels = await GetCachedModelsAsync();
+        bool isCached = cachedModels.Any(cached => cached.Equals(modelAlias, StringComparison.OrdinalIgnoreCase) || 
+                                                   cached.Contains(modelAlias, StringComparison.OrdinalIgnoreCase));
+        DebugLog($"Checking if '{modelAlias}' is cached. Cached models: [{string.Join(", ", cachedModels)}]. Result: {isCached}");
+        return isCached;
+    }
+
+    /// <summary>
+    /// Download a model with progress reporting
+    /// </summary>
+    public async Task<bool> DownloadModelAsync(string modelAlias, IProgress<string>? progressCallback = null)
+    {
+        DebugLog($"Starting download of model: {modelAlias}");
+        
+        var psi = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-ExecutionPolicy");
+        psi.ArgumentList.Add("Bypass");
+        psi.ArgumentList.Add("-Command");
+        psi.ArgumentList.Add($"foundry model download {modelAlias}");
+
+        try
+        {
+            var process = Process.Start(psi)!;
+            
+            // Read output line by line for progress updates
+            while (!process.StandardOutput.EndOfStream)
+            {
+                var line = await process.StandardOutput.ReadLineAsync();
+                if (!string.IsNullOrWhiteSpace(line))
+                {
+                    DebugLog($"Download progress: {line}");
+                    progressCallback?.Report(line);
+                }
+            }
+            
+            await process.WaitForExitAsync();
+            
+            var success = process.ExitCode == 0;
+            DebugLog($"Download completed. Success: {success}");
+            return success;
+        }
+        catch (Exception ex)
+        {
+            DebugLog($"Download failed with exception: {ex}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Load a model
+    /// </summary>
+    public async Task<bool> LoadModelAsync(string modelAlias)
+    {
+        DebugLog($"Loading model: {modelAlias}");
+        var (exitCode, output, error) = await RunFoundryCommandAsync($"model load {modelAlias}");
+        
+        var success = exitCode == 0 && output.Contains("loaded successfully");
+        DebugLog($"Model load result: {success}");
+        return success;
+    }
+
+    /// <summary>
+    /// Unload a model
+    /// </summary>
+    public async Task<bool> UnloadModelAsync(string modelAlias)
+    {
+        DebugLog($"Unloading model: {modelAlias}");
+        var (exitCode, output, error) = await RunFoundryCommandAsync($"model unload {modelAlias}");
+        
+        var success = exitCode == 0;
+        DebugLog($"Model unload result: {success}");
+        return success;
+    }
+}

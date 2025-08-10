@@ -13,21 +13,22 @@ namespace AiFoundryUI;
 public partial class MainWindow : Window
 {
     private readonly Config _config;
-    private readonly ProcessManager _proc;
     private readonly ChatClient _chat;
     private readonly SystemMonitor _monitor;
-    private readonly AiFoundryLocalClient _foundryClient;
+    private readonly FoundryService _foundryService;
     private readonly List<ChatMessage> _messages = new()
     {
         new ChatMessage { Role = "system", Content = "You are a helpful assistant." }
     };
 
+    private string? _currentModel;
+    private bool _isModelLoaded = false;
+
     public MainWindow()
     {
         InitializeComponent();
         _config = Config.LoadOrCreate();
-        _foundryClient = new AiFoundryLocalClient(Log);
-        _proc = new ProcessManager(Log, OnProcessOutput);
+        _foundryService = new FoundryService(Log);
         _chat = new ChatClient(_config);
         _monitor = new SystemMonitor();
 
@@ -46,6 +47,9 @@ public partial class MainWindow : Window
             });
         };
         _monitor.Start();
+
+        // Initially disable everything except model selection
+        // SetUIState(false, false, false, false);
 
         _ = LoadModelsOnStartupAsync();
         
@@ -92,24 +96,9 @@ public partial class MainWindow : Window
 
     private void OnProcessOutput(string output)
     {
-        // Extract service URL from foundry output
-        var serviceUrl = _foundryClient.ExtractServiceUrlFromOutput(output);
-        if (!string.IsNullOrWhiteSpace(serviceUrl))
-        {
-            _foundryClient.SetBaseUrl(serviceUrl);
-            // Update chat client's API base
-            _config.ApiBase = serviceUrl + "/v1";
-            
-            // Display the service URL in the UI
-            Dispatcher.Invoke(() =>
-            {
-                TxtServiceUrl.Text = $"Service: {serviceUrl}";
-                UpdateStatus("Service running");
-            });
-        }
-
-        // Parse and display meaningful progress information
-        ParseAndDisplayProgress(output);
+        // This method is no longer needed with the new FoundryService architecture
+        // The FoundryService handles all CLI output processing internally
+        Console.WriteLine($"Legacy OnProcessOutput called: {output}");
     }
 
     private void ParseAndDisplayProgress(string output)
@@ -208,11 +197,40 @@ public partial class MainWindow : Window
 
     private async Task LoadModelsOnStartupAsync()
     {
-        UpdateStatus("Loading models...");
+        UpdateStatus("Checking foundry service...");
+        
         try
         {
-            var models = await _foundryClient.GetAvailableModelAliasesAsync();
-            if (models.Count > 0)
+            // Step 1: Check if foundry service is already running
+            var (isRunning, serviceUrl) = await _foundryService.GetServiceStatusAsync();
+            
+            // Step 2: If not running, start the service
+            if (!isRunning)
+            {
+                UpdateStatus("Starting foundry service...");
+                serviceUrl = await _foundryService.StartServiceAsync();
+                
+                if (string.IsNullOrWhiteSpace(serviceUrl))
+                {
+                    UpdateStatus("Failed to start foundry service");
+                    Log("[error] Failed to start foundry service. Please check that 'foundry' command is available.");
+                    return;
+                }
+            }
+
+            // Step 3: Configure chat client with the actual service URL
+            if (!string.IsNullOrWhiteSpace(serviceUrl))
+            {
+                _chat.SetBaseUrl(serviceUrl);
+                Dispatcher.Invoke(() => TxtServiceUrl.Text = serviceUrl);
+                Log($"[info] Foundry service running at: {serviceUrl}");
+            }
+
+            // Step 4: Now get available models from foundry cache
+            UpdateStatus("Loading available models...");
+            var models = await _foundryService.GetAvailableModelsAsync();
+            
+            if (models?.Count > 0)
             {
                 Dispatcher.Invoke(() =>
                 {
@@ -221,19 +239,18 @@ public partial class MainWindow : Window
                         CmbModels.SelectedIndex = 0;
                 });
                 Log($"[info] Loaded {models.Count} models: {string.Join(", ", models)}");
+                UpdateStatus("Ready - Select a model and click Start");
             }
             else
             {
-                Log("[warn] No models found via CLI");
+                Log("[warn] No models found in foundry cache");
+                UpdateStatus("No models available");
             }
         }
         catch (Exception ex)
         {
-            Log($"[error] Failed to load models: {ex.Message}");
-        }
-        finally
-        {
-            UpdateStatus("Idle");
+            Log($"[error] Failed to initialize foundry service: {ex.Message}");
+            UpdateStatus("Service initialization failed");
         }
     }
 
@@ -242,6 +259,7 @@ public partial class MainWindow : Window
         // For the new clean UI, we'll only show important status updates
         // Verbose logs are no longer displayed in the UI
         System.Diagnostics.Debug.WriteLine($"[AI Foundry] {msg}");
+        Console.WriteLine($"[AI Foundry] {msg}"); // Add console output for debugging
         
         // Show only important status messages in the status area
         if (msg.Contains("[error]"))
@@ -281,66 +299,150 @@ public partial class MainWindow : Window
 
     private async void BtnStart_Click(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(_config.StartCommandTemplate))
-        {
-            MessageBox.Show("Set start_command_template in appsettings.json", "Missing config");
-            return;
-        }
+        Console.WriteLine("=== START BUTTON CLICKED ===");
+        
         var selectedModel = CmbModels.SelectedItem as string ?? string.Empty;
+        Console.WriteLine($"Selected model: '{selectedModel}'");
+        
         if (string.IsNullOrWhiteSpace(selectedModel))
         {
+            Console.WriteLine("ERROR: No model selected");
             MessageBox.Show("Select a model first.", "Missing model");
             return;
         }
 
-        // Clear previous service URL
-        TxtServiceUrl.Text = "";
-        
-        // Show initial progress
-        ShowProgress($"Starting {selectedModel}...", null);
-        UpdateStatus("Starting...");
-        
-        _proc.Start(_config, selectedModel);
-        
-        // Wait longer for service to start and URL to be detected
-        for (int i = 0; i < 60; i++) // Increased from 20 to 60 seconds
+        try
         {
-            // Wait a bit for service URL to be extracted from output
-            await Task.Delay(1000);
-            
-            // Only check health if we have a service URL
-            if (!string.IsNullOrWhiteSpace(_config.ApiBase))
+            // Step 1: Check if model is cached (downloaded)
+            UpdateStatus("Checking if model is cached...");
+            bool isCached = await _foundryService.IsModelCachedAsync(selectedModel);
+            Console.WriteLine($"Model {selectedModel} cached: {isCached}");
+
+            // Step 2: If not cached, download it first
+            if (!isCached)
             {
-                try
+                Console.WriteLine($"Model {selectedModel} not cached, starting download...");
+                UpdateStatus($"Downloading {selectedModel}...");
+                ShowProgress($"Downloading {selectedModel}...", null);
+                
+                // Set up progress callback to show download progress
+                var progress = new Progress<string>(output =>
                 {
-                    if (await _chat.HealthOkAsync())
+                    Console.WriteLine($"Download progress: {output}");
+                    Dispatcher.Invoke(() =>
                     {
-                        UpdateStatus("Running");
-                        LblHealth.Text = "Health: OK";
-                        ShowProgress("Model ready", 100);
-                        await RefreshModelsAsync();
-                        
-                        // Hide progress after showing "ready" briefly
-                        _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
-                        return;
-                    }
-                }
-                catch (Exception ex)
+                        var percent = ExtractProgressPercent(output);
+                        if (percent.HasValue)
+                        {
+                            UpdateProgressPercent(percent.Value);
+                        }
+                        else
+                        {
+                            ShowProgress($"Downloading: {output}", null);
+                        }
+                    });
+                });
+
+                bool downloadSuccess = await _foundryService.DownloadModelAsync(selectedModel, progress);
+                
+                if (!downloadSuccess)
                 {
-                    // Log but continue waiting
-                    Log($"[debug] Health check attempt {i}: {ex.Message}");
+                    UpdateStatus("Download failed");
+                    ShowProgress("Download failed", null);
+                    _ = Task.Delay(3000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
+                    return;
+                }
+                
+                Console.WriteLine($"Model {selectedModel} download completed");
+                UpdateStatus("Download completed");
+            }
+
+            // Step 3: Check service status and start if needed
+            Console.WriteLine("Checking foundry service status...");
+            UpdateStatus("Checking service status...");
+            var (isRunning, serviceUrl) = await _foundryService.GetServiceStatusAsync();
+            
+            if (!isRunning)
+            {
+                Console.WriteLine("Service not running, starting...");
+                UpdateStatus("Starting foundry service...");
+                ShowProgress("Starting service...", null);
+                serviceUrl = await _foundryService.StartServiceAsync();
+                
+                if (string.IsNullOrWhiteSpace(serviceUrl))
+                {
+                    UpdateStatus("Failed to start service");
+                    ShowProgress("Service start failed", null);
+                    _ = Task.Delay(3000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
+                    return;
                 }
             }
+
+            // Step 4: Configure chat client with service URL
+            if (!string.IsNullOrWhiteSpace(serviceUrl))
+            {
+                _chat.SetBaseUrl(serviceUrl);
+                Dispatcher.Invoke(() => TxtServiceUrl.Text = serviceUrl);
+                Console.WriteLine($"Service URL set to: {serviceUrl}");
+            }
+
+            // Step 5: Load the model
+            Console.WriteLine($"Loading model {selectedModel}...");
+            UpdateStatus($"Loading {selectedModel}...");
+            ShowProgress($"Loading {selectedModel}...", null);
+            
+            await _foundryService.LoadModelAsync(selectedModel);
+            Console.WriteLine("Model load command sent");
+            
+            // Step 6: Wait a brief moment for model to load, then try health check once
+            UpdateStatus("Verifying model is ready...");
+            await Task.Delay(3000); // Give model a few seconds to load
+            
+            try
+            {
+                bool isHealthy = await _chat.HealthOkAsync();
+                if (isHealthy)
+                {
+                    Console.WriteLine("Health check PASSED!");
+                    UpdateStatus("Running");
+                    ShowProgress("Model ready", 100);
+                    _currentModel = selectedModel;
+                    await RefreshModelsAsync();
+                    
+                    // Hide progress after showing "ready" briefly
+                    _ = Task.Delay(2000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
+                }
+                else
+                {
+                    Console.WriteLine("Health check failed - service not responding");
+                    UpdateStatus("Service not responding");
+                    ShowProgress("Health check failed", null);
+                    _ = Task.Delay(3000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Health check error: {ex.Message}");
+                UpdateStatus("Health check failed");
+                ShowProgress($"Health check error: {ex.Message}", null);
+                _ = Task.Delay(3000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
+            }
         }
-        UpdateStatus("Startup timeout");
-        LblHealth.Text = "Health: timeout";
-        ShowProgress("Startup timeout - check service URL", null);
-        _ = Task.Delay(5000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error in BtnStart_Click: {ex.Message}");
+            UpdateStatus("Error occurred");
+            ShowProgress($"Error: {ex.Message}", null);
+            _ = Task.Delay(5000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
+        }
     }
 
-    private void BtnStop_Click(object sender, RoutedEventArgs e)
+    private async void BtnStop_Click(object sender, RoutedEventArgs e)
     {
-        _proc.Stop(_config);
+        if (!string.IsNullOrWhiteSpace(_currentModel))
+        {
+            await _foundryService.UnloadModelAsync(_currentModel);
+        }
         UpdateStatus("Stopped");
         TxtServiceUrl.Text = "";
         LblHealth.Text = "";
@@ -356,7 +458,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            var models = await _foundryClient.GetAvailableModelAliasesAsync();
+            var models = await _foundryService.GetAvailableModelsAsync();
             CmbModels.ItemsSource = models;
             if (CmbModels.SelectedIndex < 0 && CmbModels.Items.Count > 0)
                 CmbModels.SelectedIndex = 0;
@@ -377,11 +479,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        Task.Run(async () =>
-        {
-            var ok = await _chat.SelectModelAsync(model);
-            Log(ok ? "[info] Model selected." : "[warn] Model selection may have failed.");
-        });
+        // Model selection is handled by the foundry service
+        Log("[info] Model selection handled by foundry service.");
     }
 
     private async void BtnSend_Click(object sender, RoutedEventArgs e)
@@ -405,7 +504,7 @@ public partial class MainWindow : Window
             if (_config.OpenAICompatible)
             {
                 var temp = (float)SldTemp.Value;
-                reply = await _chat.SendChatOpenAIAsync(model, _messages, temp);
+                reply = await _chat.SendChatAsync(model, _messages, temp);
             }
             else
             {

@@ -15,6 +15,7 @@ public class ChatClient
 {
     private readonly HttpClient _http = new();
     private readonly Config _cfg;
+    private string? _baseUrl;
 
     public ChatClient(Config cfg)
     {
@@ -23,72 +24,75 @@ public class ChatClient
             _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _cfg.ApiKey);
     }
 
+    public void SetBaseUrl(string baseUrl)
+    {
+        _baseUrl = baseUrl?.TrimEnd('/');
+        Console.WriteLine($"[ChatClient] Base URL set to: {_baseUrl}");
+    }
+
+    private void DebugLog(string message)
+    {
+        var logMessage = $"[ChatClient] {message}";
+        Console.WriteLine(logMessage);
+    }
+
     public async Task<bool> HealthOkAsync()
     {
-        var url = _cfg.HealthUrl;
-        if (string.IsNullOrWhiteSpace(url)) return true;
+        // Try the health endpoint first
+        var healthUrl = !string.IsNullOrWhiteSpace(_baseUrl) ? $"{_baseUrl}/health" : _cfg.HealthUrl;
+        
+        if (string.IsNullOrWhiteSpace(healthUrl)) 
+        {
+            DebugLog("No health URL available");
+            return true;
+        }
+        
         try
         {
+            DebugLog($"Checking health at: {healthUrl}");
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var r = await _http.GetAsync(url, cts.Token);
+            var r = await _http.GetAsync(healthUrl, cts.Token);
+            DebugLog($"Health check response: {r.StatusCode}");
             return r.IsSuccessStatusCode;
         }
-        catch { return false; }
+        catch (Exception ex)
+        {
+            DebugLog($"Health check failed: {ex.Message}");
+            return false;
+        }
     }
 
     public async Task<List<string>> ListModelsAsync()
     {
         var results = new List<string>();
 
-        if (_cfg.OpenAICompatible)
-        {
-            var baseUrl = _cfg.ApiBase.TrimEnd('/');
-            if (!string.IsNullOrWhiteSpace(baseUrl))
-            {
-                try
-                {
-                    using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
-                    var r = await _http.GetAsync($"{baseUrl}/models", cts.Token);
-                    if (r.IsSuccessStatusCode)
-                    {
-                        using var s = await r.Content.ReadAsStreamAsync(cts.Token);
-                        using var doc = await JsonDocument.ParseAsync(s, cancellationToken: cts.Token);
-                        if (doc.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
-                        {
-                            results = data.EnumerateArray()
-                                .Select(e => e.TryGetProperty("id", out var id) ? id.GetString() : null)
-                                .Where(id => !string.IsNullOrWhiteSpace(id))
-                                .Cast<string>()
-                                .ToList();
-                        }
-                    }
-                }
-                catch { /* ignore */ }
-            }
-        }
-
-        if (results.Count == 0 && !string.IsNullOrWhiteSpace(_cfg.ModelListCommand))
+        var baseUrl = !string.IsNullOrWhiteSpace(_baseUrl) ? _baseUrl : _cfg.ApiBase?.TrimEnd('/');
+        
+        if (!string.IsNullOrWhiteSpace(baseUrl))
         {
             try
             {
-                var psi = new ProcessStartInfo
+                DebugLog($"Listing models from: {baseUrl}/v1/models");
+                using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
+                var r = await _http.GetAsync($"{baseUrl}/v1/models", cts.Token);
+                if (r.IsSuccessStatusCode)
                 {
-                    FileName = "powershell.exe",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true
-                };
-                psi.ArgumentList.Add("-NoProfile");
-                psi.ArgumentList.Add("-ExecutionPolicy");
-                psi.ArgumentList.Add("Bypass");
-                psi.ArgumentList.Add("-Command");
-                psi.ArgumentList.Add(_cfg.ModelListCommand);
-                var p = Process.Start(psi)!;
-                var output = await p.StandardOutput.ReadToEndAsync();
-                p.WaitForExit(15000);
-                var fromCli = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                results = fromCli.Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+                    using var s = await r.Content.ReadAsStreamAsync(cts.Token);
+                    using var doc = await JsonDocument.ParseAsync(s, cancellationToken: cts.Token);
+                    if (doc.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
+                    {
+                        results = data.EnumerateArray()
+                            .Select(e => e.TryGetProperty("id", out var id) ? id.GetString() : null)
+                            .Where(id => !string.IsNullOrWhiteSpace(id))
+                            .Cast<string>()
+                            .ToList();
+                    }
+                }
             }
-            catch { /* ignore */ }
+            catch (Exception ex)
+            {
+                DebugLog($"Failed to list models via API: {ex.Message}");
+            }
         }
 
         if (results.Count == 0 && _cfg.Models.Count > 0)
@@ -97,61 +101,68 @@ public class ChatClient
         return results;
     }
 
-    public async Task<bool> SelectModelAsync(string modelId)
+    public async Task<string> SendChatAsync(string model, List<ChatMessage> messages, float temperature)
     {
-        if (!string.IsNullOrWhiteSpace(_cfg.SelectModelCommandTemplate))
+        var baseUrl = !string.IsNullOrWhiteSpace(_baseUrl) ? _baseUrl : _cfg.ApiBase?.TrimEnd('/');
+        
+        if (string.IsNullOrWhiteSpace(baseUrl))
         {
-            try
-            {
-                var cmd = _cfg.SelectModelCommandTemplate.Replace("{model}", modelId);
-                var psi = new ProcessStartInfo
-                {
-                    FileName = "powershell.exe",
-                    UseShellExecute = false
-                };
-                psi.ArgumentList.Add("-NoProfile");
-                psi.ArgumentList.Add("-ExecutionPolicy");
-                psi.ArgumentList.Add("Bypass");
-                psi.ArgumentList.Add("-Command");
-                psi.ArgumentList.Add(cmd);
-                var p = Process.Start(psi)!;
-                p.WaitForExit(30000);
-                return true;
-            }
-            catch { return false; }
+            DebugLog("No base URL set for chat");
+            return "Error: No service URL available";
         }
-        return true;
-    }
 
-    public async Task<string> SendChatOpenAIAsync(string model, List<ChatMessage> messages, float temperature)
-    {
-        var baseUrl = _cfg.ApiBase.TrimEnd('/');
-        var url = $"{baseUrl}/chat/completions";
+        var url = $"{baseUrl}/v1/chat/completions";
+        DebugLog($"Sending chat request to: {url}");
+
         var body = new
         {
             model,
-            messages,
+            messages = messages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
             temperature,
+            max_tokens = 2048,
             stream = false
         };
-        using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(60));
-        var json = JsonSerializer.Serialize(body);
-        using var req = new HttpRequestMessage(HttpMethod.Post, url)
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
-        };
-        var resp = await _http.SendAsync(req, cts.Token);
-        resp.EnsureSuccessStatusCode();
-        using var s = await resp.Content.ReadAsStreamAsync(cts.Token);
-        using var doc = await JsonDocument.ParseAsync(s, cancellationToken: cts.Token);
+
         try
         {
-            var content = doc.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
-            return content ?? "";
+            var json = JsonSerializer.Serialize(body);
+            DebugLog($"Request body: {json.Substring(0, Math.Min(200, json.Length))}...");
+            
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var response = await _http.PostAsync(url, content, cts.Token);
+            
+            DebugLog($"Chat response status: {response.StatusCode}");
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync(cts.Token);
+                DebugLog($"Chat error response: {errorContent}");
+                return $"Error {response.StatusCode}: {errorContent}";
+            }
+
+            var responseJson = await response.Content.ReadAsStringAsync(cts.Token);
+            DebugLog($"Chat response: {responseJson.Substring(0, Math.Min(200, responseJson.Length))}...");
+            
+            using var doc = JsonDocument.Parse(responseJson);
+            if (doc.RootElement.TryGetProperty("choices", out var choices) && choices.ValueKind == JsonValueKind.Array)
+            {
+                var firstChoice = choices.EnumerateArray().FirstOrDefault();
+                if (firstChoice.TryGetProperty("message", out var message))
+                {
+                    if (message.TryGetProperty("content", out var messageContent))
+                    {
+                        return messageContent.GetString() ?? "No response content";
+                    }
+                }
+            }
+
+            return "Error: Unexpected response format";
         }
-        catch
+        catch (Exception ex)
         {
-            return doc.RootElement.ToString();
+            DebugLog($"Chat request failed: {ex}");
+            return $"Error: {ex.Message}";
         }
     }
 }

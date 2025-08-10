@@ -19,6 +19,14 @@ public class AiFoundryLocalClient
     public void SetBaseUrl(string baseUrl)
     {
         _baseUrl = baseUrl?.TrimEnd('/');
+        Console.WriteLine($"[AiFoundryLocalClient] Base URL set to: {_baseUrl}");
+    }
+
+    private void DebugLog(string message)
+    {
+        var logMessage = $"[AiFoundryLocalClient] {message}";
+        Console.WriteLine(logMessage);
+        _log(logMessage);
     }
 
     /// <summary>
@@ -26,11 +34,14 @@ public class AiFoundryLocalClient
     /// </summary>
     public async Task<List<string>> GetAvailableModelAliasesAsync()
     {
+        DebugLog("Getting available model aliases...");
+        
         var psi = new ProcessStartInfo
         {
             FileName = "powershell.exe",
             UseShellExecute = false,
             RedirectStandardOutput = true,
+            RedirectStandardError = true,
             CreateNoWindow = true,
         };
         psi.ArgumentList.Add("-NoProfile");
@@ -39,11 +50,24 @@ public class AiFoundryLocalClient
         psi.ArgumentList.Add("-Command");
         psi.ArgumentList.Add("foundry model list");
 
+        DebugLog("Executing: foundry model list");
+
         try
         {
             var p = Process.Start(psi)!;
             var output = await p.StandardOutput.ReadToEndAsync();
+            var error = await p.StandardError.ReadToEndAsync();
             await p.WaitForExitAsync();
+            
+            DebugLog($"foundry model list exit code: {p.ExitCode}");
+            if (!string.IsNullOrWhiteSpace(output))
+            {
+                DebugLog($"STDOUT:\n{output}");
+            }
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                DebugLog($"STDERR:\n{error}");
+            }
             
             // Parse table format to extract unique aliases
             var aliases = new HashSet<string>();
@@ -169,16 +193,22 @@ public class AiFoundryLocalClient
     public async Task<bool> IsServiceRunningAsync()
     {
         if (string.IsNullOrWhiteSpace(_baseUrl))
+        {
+            DebugLog("Cannot check service status - no base URL set");
             return false;
+        }
 
         try
         {
+            DebugLog($"Checking service status at: {_baseUrl}/openai/status");
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             var response = await _http.GetAsync($"{_baseUrl}/openai/status", cts.Token);
+            DebugLog($"Service status check response: {response.StatusCode}");
             return response.IsSuccessStatusCode;
         }
-        catch
+        catch (Exception ex)
         {
+            DebugLog($"Service status check failed: {ex.Message}");
             return false;
         }
     }
@@ -189,11 +219,14 @@ public class AiFoundryLocalClient
     /// </summary>
     public string? ExtractServiceUrlFromOutput(string output)
     {
+        DebugLog($"Extracting service URL from output: {output.Substring(0, Math.Min(100, output.Length))}...");
+        
         try
         {
             var lines = output.Split('\n');
             foreach (var line in lines)
             {
+                DebugLog($"Checking line: {line}");
                 if (line.Contains("Service is Started on"))
                 {
                     var start = line.IndexOf("http://");
@@ -203,15 +236,18 @@ public class AiFoundryLocalClient
                         if (end > start)
                         {
                             var url = line.Substring(start, end - start);
+                            DebugLog($"Successfully extracted service URL: {url}");
                             _log($"[info] Detected service URL: {url}");
                             return url;
                         }
                     }
                 }
             }
+            DebugLog("No service URL found in output");
         }
         catch (Exception ex)
         {
+            DebugLog($"Exception extracting service URL: {ex}");
             _log($"[warn] Failed to extract service URL: {ex.Message}");
         }
         return null;
