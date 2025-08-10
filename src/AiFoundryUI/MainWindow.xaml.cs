@@ -503,8 +503,18 @@ public partial class MainWindow : Window
             string reply;
             if (_config.OpenAICompatible)
             {
-                var temp = (float)SldTemp.Value;
-                reply = await _chat.SendChatAsync(model, _messages, temp);
+                // Get the actual model ID from the foundry service for the chat completion
+                var modelId = await _foundryService.GetLoadedModelIdAsync(model);
+                if (string.IsNullOrWhiteSpace(modelId))
+                {
+                    reply = $"Error: Model '{model}' is not loaded. Please start the model first.";
+                }
+                else
+                {
+                    Console.WriteLine($"Using model ID '{modelId}' for chat completion (alias: '{model}')");
+                    var temp = (float)SldTemp.Value;
+                    reply = await _chat.SendChatAsync(modelId, _messages, temp);
+                }
             }
             else
             {

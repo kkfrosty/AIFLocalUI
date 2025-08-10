@@ -38,17 +38,18 @@ public class ChatClient
 
     public async Task<bool> HealthOkAsync()
     {
-        // Try the health endpoint first
-        var healthUrl = !string.IsNullOrWhiteSpace(_baseUrl) ? $"{_baseUrl}/health" : _cfg.HealthUrl;
+        // For foundry service, try the /v1/models endpoint as a health check
+        var baseUrl = !string.IsNullOrWhiteSpace(_baseUrl) ? _baseUrl : _cfg.ApiBase?.TrimEnd('/');
         
-        if (string.IsNullOrWhiteSpace(healthUrl)) 
+        if (string.IsNullOrWhiteSpace(baseUrl)) 
         {
-            DebugLog("No health URL available");
-            return true;
+            DebugLog("No base URL available for health check");
+            return false;
         }
         
         try
         {
+            var healthUrl = $"{baseUrl}/v1/models";
             DebugLog($"Checking health at: {healthUrl}");
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
             var r = await _http.GetAsync(healthUrl, cts.Token);

@@ -78,6 +78,11 @@ public class FoundryService
                 if (match.Success)
                 {
                     var url = match.Groups[1].Value;
+                    // Remove any trailing path like /openai/status to get the base URL
+                    if (url.EndsWith("/openai/status"))
+                    {
+                        url = url.Replace("/openai/status", "");
+                    }
                     DebugLog($"Service is running at: {url}");
                     return (true, url);
                 }
@@ -107,6 +112,11 @@ public class FoundryService
                 if (match.Success)
                 {
                     var url = match.Groups[1].Value;
+                    // Remove any trailing path like /openai/status to get the base URL
+                    if (url.EndsWith("/openai/status"))
+                    {
+                        url = url.Replace("/openai/status", "");
+                    }
                     DebugLog($"Service running at: {url}");
                     return url;
                 }
@@ -266,6 +276,56 @@ public class FoundryService
         var success = exitCode == 0 && output.Contains("loaded successfully");
         DebugLog($"Model load result: {success}");
         return success;
+    }
+
+    /// <summary>
+    /// Get the actual model ID for a loaded model alias
+    /// </summary>
+    public async Task<string?> GetLoadedModelIdAsync(string modelAlias)
+    {
+        DebugLog($"Getting loaded model ID for alias: {modelAlias}");
+        var (exitCode, output, error) = await RunFoundryCommandAsync("service list");
+        
+        if (exitCode != 0)
+        {
+            DebugLog($"Failed to get service list. Exit code: {exitCode}");
+            return null;
+        }
+
+        var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        
+        bool inModelsSection = false;
+        foreach (var line in lines)
+        {
+            if (line.Contains("Models running in service:"))
+            {
+                inModelsSection = true;
+                continue;
+            }
+            if (!inModelsSection) continue;
+            
+            // Look for lines like: "🟢  gpt-oss-20b                    gpt-oss-20b-cuda-gpu"
+            if (line.Contains(modelAlias))
+            {
+                var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 3)
+                {
+                    // Find the alias in the parts and get the model ID (last part)
+                    for (int i = 0; i < parts.Length - 1; i++)
+                    {
+                        if (parts[i] == modelAlias)
+                        {
+                            var modelId = parts[parts.Length - 1];
+                            DebugLog($"Found model ID '{modelId}' for alias '{modelAlias}'");
+                            return modelId;
+                        }
+                    }
+                }
+            }
+        }
+        
+        DebugLog($"No loaded model found for alias: {modelAlias}");
+        return null;
     }
 
     /// <summary>
