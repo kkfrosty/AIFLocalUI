@@ -15,22 +15,49 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Simple top bar with permanent branding and status -->
+        <!-- Enhanced top bar with service management -->
         <Border Grid.Row="0" Background="White" BorderBrush="#E1E5E9" BorderThickness="0,0,0,1" Padding="20,12">
             <DockPanel>
+                <!-- Left: App branding -->
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" VerticalAlignment="Center">
                     <TextBlock Text="🤖" FontSize="20" VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <TextBlock Text="AI Foundry Local" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
                 </StackPanel>
+                
+                <!-- Right: Settings and refresh -->
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
                     <Button x:Name="BtnRefreshModels" Content="⟳" ToolTip="Refresh Models" Width="32" Height="32" Margin="0,0,8,0" Click="BtnRefreshModels_Click" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"/>
                     <Button x:Name="BtnOpenConfig" Content="⚙" ToolTip="Settings" Width="32" Height="32" Click="BtnOpenConfig_Click" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"/>
                 </StackPanel>
-                <StackPanel Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <TextBlock x:Name="TxtStatus" Text="Ready" Foreground="#6B7280" FontWeight="Medium" HorizontalAlignment="Center"/>
-                    <TextBlock x:Name="TxtServiceUrl" Text="" Foreground="#3B82F6" FontSize="12" HorizontalAlignment="Center" Margin="0,2,0,0"/>
-                    <ProgressBar x:Name="PbModelLoading" Width="200" Height="4" Margin="0,4,0,0" Visibility="Collapsed"/>
-                </StackPanel>
+                
+                <!-- Center: Service Status and Controls -->
+                <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    
+                    <!-- Service status indicator -->
+                    <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,4">
+                        <Ellipse x:Name="ServiceStatusIndicator" Width="8" Height="8" Fill="#EF4444" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBlock x:Name="TxtServiceStatus" Text="Service Stopped" FontWeight="Medium" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <TextBlock x:Name="TxtCurrentModel" Text="" Foreground="#6B7280" FontStyle="Italic" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    
+                    <!-- Service URL -->
+                    <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" x:Name="TxtServiceUrl" Text="" Foreground="#3B82F6" FontSize="12" HorizontalAlignment="Center" Margin="0,2,0,8"/>
+                    
+                    <!-- Service control buttons -->
+                    <Button Grid.Row="2" Grid.Column="0" x:Name="BtnStartService" Content="Start Service" Background="#10B981" Foreground="White" BorderThickness="0" Padding="12,4" Margin="0,0,4,0" FontSize="11" Click="BtnStartService_Click"/>
+                    <Button Grid.Row="2" Grid.Column="1" x:Name="BtnStopService" Content="Stop Service" Background="#EF4444" Foreground="White" BorderThickness="0" Padding="12,4" Margin="4,0,4,0" FontSize="11" Click="BtnStopService_Click" Visibility="Collapsed"/>
+                    <Button Grid.Row="2" Grid.Column="2" x:Name="BtnRestartService" Content="Restart" Background="#F59E0B" Foreground="White" BorderThickness="0" Padding="12,4" Margin="4,0,0,0" FontSize="11" Click="BtnRestartService_Click" Visibility="Collapsed"/>
+                </Grid>
             </DockPanel>
         </Border>
 
@@ -83,7 +110,7 @@
             </Grid>
         </Border>
 
-        <!-- Model selector (like Azure ChatPlayground) -->
+        <!-- Model management section (separate from service) -->
         <Border Grid.Row="3" Background="#F8F9FA" BorderBrush="#E1E5E9" BorderThickness="0,1,0,0" Padding="20,16">
             <StackPanel>
                 <!-- Model controls row -->
@@ -94,23 +121,26 @@
                               Margin="0,0,16,0" 
                               Padding="8,6"
                               SelectionChanged="CmbModels_SelectionChanged"/>
-                    <Button x:Name="BtnStart" 
-                            Content="Start" 
-                            Background="#10B981" 
+                    
+                    <!-- Model Load/Unload buttons -->
+                    <Button x:Name="BtnLoadModel" 
+                            Content="Load Model" 
+                            Background="#3B82F6" 
                             Foreground="White" 
                             BorderThickness="0" 
                             Padding="16,6" 
                             Margin="0,0,8,0"
-                            Click="BtnStart_Click"/>
-                    <Button x:Name="BtnStop" 
-                            Content="Stop" 
+                            Click="BtnLoadModel_Click"/>
+                    <Button x:Name="BtnUnloadModel" 
+                            Content="Unload Model" 
                             Background="#EF4444" 
                             Foreground="White" 
                             BorderThickness="0" 
                             Padding="16,6" 
                             Margin="0,0,16,0"
-                            Click="BtnStop_Click"/>
+                            Click="BtnUnloadModel_Click"/>
                     
+                    <!-- Temperature control -->
                     <StackPanel Orientation="Horizontal" Margin="16,0,0,0">
                         <TextBlock Text="Temperature:" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" Foreground="#6B7280"/>
                         <Slider x:Name="SldTemp" 
@@ -129,10 +159,10 @@
                     </StackPanel>
                 </StackPanel>
                 
-                <!-- Progress/Status row -->
+                <!-- Progress/Status row for model operations -->
                 <StackPanel x:Name="ProgressPanel" Orientation="Horizontal" VerticalAlignment="Center" Visibility="Collapsed">
                     <TextBlock x:Name="LblProgressStatus" 
-                               Text="Starting model..." 
+                               Text="Loading model..." 
                                FontSize="13" 
                                Foreground="#6B7280" 
                                VerticalAlignment="Center" 

@@ -329,6 +329,83 @@ public class FoundryService
     }
 
     /// <summary>
+    /// Get list of currently loaded models using "foundry service list"
+    /// </summary>
+    public async Task<List<string>> GetCurrentlyLoadedModelsAsync()
+    {
+        DebugLog("Getting currently loaded models with 'foundry service list'");
+        var (exitCode, output, error) = await RunFoundryCommandAsync("service list");
+        
+        if (exitCode != 0)
+        {
+            DebugLog($"Failed to get service list. Exit code: {exitCode}");
+            return new List<string>();
+        }
+
+        var loadedModels = new List<string>();
+        var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        
+        // Check for "No models are currently loaded in the service." message
+        if (output.Contains("No models are currently loaded in the service"))
+        {
+            DebugLog("No models currently loaded in service");
+            return loadedModels; // Return empty list
+        }
+
+        bool inModelsSection = false;
+        foreach (var line in lines)
+        {
+            // Look for the section that lists running models
+            if (line.Contains("Models running in service:"))
+            {
+                inModelsSection = true;
+                continue;
+            }
+            if (!inModelsSection) continue;
+            
+            // Look for lines like: "🟢  gpt-oss-20b                    gpt-oss-20b-cuda-gpu"
+            // Extract the alias (second column) and model ID (third column)
+            if (line.Contains("🟢"))
+            {
+                var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 3)
+                {
+                    // The format is typically: [icon] [alias] [model-id]
+                    // We want to return the alias, but could also return the model ID
+                    var alias = parts[1];
+                    var modelId = parts[2];
+                    
+                    loadedModels.Add(alias);
+                    DebugLog($"Found loaded model: {alias} (ID: {modelId})");
+                }
+            }
+        }
+        
+        DebugLog($"Found {loadedModels.Count} loaded models");
+        return loadedModels;
+    }
+
+    /// <summary>
+    /// Stop the foundry service
+    /// </summary>
+    public async Task<bool> StopServiceAsync()
+    {
+        DebugLog("Stopping foundry service...");
+        var (exitCode, output, error) = await RunFoundryCommandAsync("service stop");
+        
+        var success = exitCode == 0;
+        if (success)
+        {
+            DebugLog("Service stopped successfully");
+        }
+        else
+        {
+            DebugLog($"Failed to stop service. Exit code: {exitCode}, Error: {error}");
+        }
+        return success;
+    }
+
+    /// <summary>
     /// Unload a model
     /// </summary>
     public async Task<bool> UnloadModelAsync(string modelAlias)

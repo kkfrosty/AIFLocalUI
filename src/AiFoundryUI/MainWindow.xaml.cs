@@ -23,13 +23,15 @@ public partial class MainWindow : Window
 
     private string? _currentModel;
     private bool _isModelLoaded = false;
+    private bool _isChatBusy = false;
+    private bool _isServiceRunning = false;
 
     public MainWindow()
     {
         InitializeComponent();
         _config = Config.LoadOrCreate();
         _foundryService = new FoundryService(Log);
-        _chat = new ChatClient(_config);
+        _chat = new ChatClient(_config, _foundryService);
         _monitor = new SystemMonitor();
 
         _monitor.MetricsUpdated += (_, m) =>
@@ -203,12 +205,14 @@ public partial class MainWindow : Window
         {
             // Step 1: Check if foundry service is already running
             var (isRunning, serviceUrl) = await _foundryService.GetServiceStatusAsync();
+            UpdateServiceStatusDisplay(isRunning);
             
             // Step 2: If not running, start the service
             if (!isRunning)
             {
                 UpdateStatus("Starting foundry service...");
                 serviceUrl = await _foundryService.StartServiceAsync();
+                UpdateServiceStatusDisplay(!string.IsNullOrWhiteSpace(serviceUrl));
                 
                 if (string.IsNullOrWhiteSpace(serviceUrl))
                 {
@@ -295,7 +299,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void UpdateStatus(string text) => Dispatcher.Invoke(() => TxtStatus.Text = text);
+    private void UpdateStatus(string text) => Dispatcher.Invoke(() => TxtServiceStatus.Text = text);
 
     private async void BtnStart_Click(object sender, RoutedEventArgs e)
     {
@@ -503,18 +507,10 @@ public partial class MainWindow : Window
             string reply;
             if (_config.OpenAICompatible)
             {
-                // Get the actual model ID from the foundry service for the chat completion
-                var modelId = await _foundryService.GetLoadedModelIdAsync(model);
-                if (string.IsNullOrWhiteSpace(modelId))
-                {
-                    reply = $"Error: Model '{model}' is not loaded. Please start the model first.";
-                }
-                else
-                {
-                    Console.WriteLine($"Using model ID '{modelId}' for chat completion (alias: '{model}')");
-                    var temp = (float)SldTemp.Value;
-                    reply = await _chat.SendChatAsync(modelId, _messages, temp);
-                }
+                // Use the model alias directly - ChatClient handles the URL resolution
+                Console.WriteLine($"Sending chat request with model alias: '{model}'");
+                var temp = (float)SldTemp.Value;
+                reply = await _chat.SendChatAsync(model, _messages, temp);
             }
             else
             {
@@ -554,8 +550,8 @@ public partial class MainWindow : Window
                 FontSize = 12
             };
 
-            // Add message content
-            var messageText = new TextBlock
+            // Add message content - use TextBox to make it copyable
+            var messageText = new TextBox
             {
                 Text = text,
                 TextWrapping = TextWrapping.Wrap,
@@ -564,7 +560,10 @@ public partial class MainWindow : Window
                 Foreground = new System.Windows.Media.SolidColorBrush(
                     who == "You" ? System.Windows.Media.Colors.White : System.Windows.Media.Colors.Black),
                 Padding = new Thickness(12, 8, 12, 8),
-                MaxWidth = 500
+                MaxWidth = 500,
+                IsReadOnly = true,
+                BorderThickness = new Thickness(0),
+                IsTabStop = false
             };
 
             messagePanel.Children.Add(senderLabel);
@@ -593,5 +592,221 @@ public partial class MainWindow : Window
         {
             MessageBox.Show("Failed to open config: " + ex.Message);
         }
+    }
+
+    // ===== SERVICE MANAGEMENT HANDLERS =====
+    
+    private async void BtnStartService_Click(object sender, RoutedEventArgs e)
+    {
+        UpdateStatus("Starting service...");
+        try
+        {
+            var serviceUrl = await _foundryService.StartServiceAsync();
+            if (!string.IsNullOrWhiteSpace(serviceUrl))
+            {
+                TxtServiceUrl.Text = serviceUrl;
+                UpdateServiceStatusDisplay(true);
+                UpdateStatus("Service started");
+                Log($"[info] Service started at: {serviceUrl}");
+            }
+            else
+            {
+                UpdateStatus("Failed to start service");
+                Log("[error] Failed to start foundry service");
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateStatus("Service start failed");
+            Log($"[error] Service start error: {ex.Message}");
+        }
+    }
+
+    private async void BtnStopService_Click(object sender, RoutedEventArgs e)
+    {
+        UpdateStatus("Stopping service...");
+        try
+        {
+            var result = await _foundryService.StopServiceAsync();
+            if (result)
+            {
+                TxtServiceUrl.Text = "";
+                UpdateServiceStatusDisplay(false);
+                UpdateStatus("Service stopped");
+                Log("[info] Service stopped");
+                
+                // Clear model state since service is stopped
+                _isModelLoaded = false;
+                _currentModel = null;
+                UpdateCurrentModelDisplay();
+                UpdateUIState();
+            }
+            else
+            {
+                UpdateStatus("Failed to stop service");
+                Log("[error] Failed to stop foundry service");
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateStatus("Service stop failed");
+            Log($"[error] Service stop error: {ex.Message}");
+        }
+    }
+
+    private async void BtnRestartService_Click(object sender, RoutedEventArgs e)
+    {
+        UpdateStatus("Restarting service...");
+        try
+        {
+            // Stop first
+            await _foundryService.StopServiceAsync();
+            await Task.Delay(2000); // Wait a bit
+            
+            // Start again
+            var serviceUrl = await _foundryService.StartServiceAsync();
+            if (!string.IsNullOrWhiteSpace(serviceUrl))
+            {
+                TxtServiceUrl.Text = serviceUrl;
+                UpdateServiceStatusDisplay(true);
+                UpdateStatus("Service restarted");
+                Log($"[info] Service restarted at: {serviceUrl}");
+                
+                // Clear model state and reload
+                _isModelLoaded = false;
+                _currentModel = null;
+                UpdateCurrentModelDisplay();
+                UpdateUIState();
+                
+                // Reload models list
+                await RefreshModelsAsync();
+            }
+            else
+            {
+                UpdateStatus("Restart failed");
+                Log("[error] Service restart failed");
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateStatus("Restart failed");
+            Log($"[error] Service restart error: {ex.Message}");
+        }
+    }
+
+    // ===== MODEL MANAGEMENT HANDLERS =====
+    
+    private async void BtnLoadModel_Click(object sender, RoutedEventArgs e)
+    {
+        var selectedModel = CmbModels.SelectedItem as string ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(selectedModel))
+        {
+            MessageBox.Show("Select a model first.", "Missing model");
+            return;
+        }
+
+        UpdateStatus("Loading model...");
+        try
+        {
+            var result = await _foundryService.LoadModelAsync(selectedModel);
+            if (result)
+            {
+                _currentModel = selectedModel;
+                _isModelLoaded = true;
+                
+                UpdateStatus($"Model loaded: {selectedModel}");
+                UpdateCurrentModelDisplay();
+                UpdateUIState();
+                Log($"[info] Model loaded successfully: {selectedModel}");
+            }
+            else
+            {
+                UpdateStatus("Failed to load model");
+                Log($"[error] Failed to load model: {selectedModel}");
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateStatus("Model load failed");
+            Log($"[error] Model load error: {ex.Message}");
+        }
+    }
+
+    private async void BtnUnloadModel_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_currentModel))
+        {
+            MessageBox.Show("No model is currently loaded.", "No model");
+            return;
+        }
+
+        UpdateStatus("Unloading model...");
+        try
+        {
+            var result = await _foundryService.UnloadModelAsync(_currentModel);
+            if (result)
+            {
+                var previousModel = _currentModel;
+                _currentModel = null;
+                _isModelLoaded = false;
+                
+                UpdateStatus("Model unloaded");
+                UpdateCurrentModelDisplay();
+                UpdateUIState();
+                Log($"[info] Model unloaded: {previousModel}");
+            }
+            else
+            {
+                UpdateStatus("Failed to unload model");
+                Log($"[error] Failed to unload model: {_currentModel}");
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateStatus("Model unload failed");
+            Log($"[error] Model unload error: {ex.Message}");
+        }
+    }
+
+    // ===== UI STATE HELPERS =====
+    
+    private void UpdateServiceStatusDisplay(bool isRunning)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            _isServiceRunning = isRunning;
+            ServiceStatusIndicator.Fill = new SolidColorBrush(isRunning ? Colors.Green : Colors.Red);
+            TxtServiceStatus.Text = isRunning ? "Service Running" : "Service Stopped";
+
+            // Enable/disable for safety
+            BtnStartService.IsEnabled = !isRunning;
+            BtnStopService.IsEnabled = isRunning;
+            BtnRestartService.IsEnabled = isRunning;
+
+            // Visibility rules per requirements
+            BtnStartService.Visibility = isRunning ? Visibility.Collapsed : Visibility.Visible;
+            BtnStopService.Visibility = isRunning ? Visibility.Visible : Visibility.Collapsed;
+            BtnRestartService.Visibility = isRunning ? Visibility.Visible : Visibility.Collapsed;
+        });
+    }
+
+    private void UpdateCurrentModelDisplay()
+    {
+        Dispatcher.Invoke(() =>
+        {
+            TxtCurrentModel.Text = _isModelLoaded && !string.IsNullOrEmpty(_currentModel) 
+                ? $"Model: {_currentModel}" 
+                : "No model loaded";
+        });
+    }
+
+    private void UpdateUIState()
+    {
+        Dispatcher.Invoke(() =>
+        {
+            BtnLoadModel.IsEnabled = !string.IsNullOrEmpty(CmbModels.SelectedItem as string);
+            BtnUnloadModel.IsEnabled = _isModelLoaded && !string.IsNullOrEmpty(_currentModel);
+            BtnSend.IsEnabled = _isModelLoaded;
+        });
     }
 }

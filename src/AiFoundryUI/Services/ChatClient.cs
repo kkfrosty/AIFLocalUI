@@ -13,21 +13,72 @@ namespace AiFoundryUI.Services;
 
 public class ChatClient
 {
-    private readonly HttpClient _http = new();
+    private readonly HttpClient _http;
     private readonly Config _cfg;
+    private readonly FoundryService? _foundryService;
     private string? _baseUrl;
 
     public ChatClient(Config cfg)
     {
         _cfg = cfg;
+        
+        // Create HttpClient with better timeout and connection settings
+        var handler = new HttpClientHandler()
+        {
+            ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true // For local development
+        };
+        
+        _http = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromMinutes(5) // Overall timeout for the entire request
+        };
+        
         if (!string.IsNullOrWhiteSpace(_cfg.ApiKey))
             _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _cfg.ApiKey);
+    }
+
+    public ChatClient(Config cfg, FoundryService foundryService) : this(cfg)
+    {
+        _foundryService = foundryService;
     }
 
     public void SetBaseUrl(string baseUrl)
     {
         _baseUrl = baseUrl?.TrimEnd('/');
         Console.WriteLine($"[ChatClient] Base URL set to: {_baseUrl}");
+    }
+
+    /// <summary>
+    /// Get the current service URL, either from foundry service status or fallback to cached base URL
+    /// </summary>
+    private async Task<string?> GetCurrentServiceUrlAsync()
+    {
+        // If we have a FoundryService, always check the current service status to get the latest URL
+        if (_foundryService != null)
+        {
+            try
+            {
+                var (isRunning, serviceUrl) = await _foundryService.GetServiceStatusAsync();
+                if (isRunning && !string.IsNullOrWhiteSpace(serviceUrl))
+                {
+                    DebugLog($"Got current service URL from foundry: {serviceUrl}");
+                    return serviceUrl.TrimEnd('/');
+                }
+                else
+                {
+                    DebugLog("Foundry service not running or no URL available");
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugLog($"Failed to get current service URL from foundry: {ex.Message}");
+            }
+        }
+
+        // Fallback to cached base URL or config
+        var fallbackUrl = !string.IsNullOrWhiteSpace(_baseUrl) ? _baseUrl : _cfg.ApiBase?.TrimEnd('/');
+        DebugLog($"Using fallback URL: {fallbackUrl}");
+        return fallbackUrl;
     }
 
     private void DebugLog(string message)
@@ -38,8 +89,8 @@ public class ChatClient
 
     public async Task<bool> HealthOkAsync()
     {
-        // For foundry service, try the /v1/models endpoint as a health check
-        var baseUrl = !string.IsNullOrWhiteSpace(_baseUrl) ? _baseUrl : _cfg.ApiBase?.TrimEnd('/');
+        // Get the current service URL dynamically
+        var baseUrl = await GetCurrentServiceUrlAsync();
         
         if (string.IsNullOrWhiteSpace(baseUrl)) 
         {
@@ -67,7 +118,8 @@ public class ChatClient
     {
         var results = new List<string>();
 
-        var baseUrl = !string.IsNullOrWhiteSpace(_baseUrl) ? _baseUrl : _cfg.ApiBase?.TrimEnd('/');
+        // Get the current service URL dynamically
+        var baseUrl = await GetCurrentServiceUrlAsync();
         
         if (!string.IsNullOrWhiteSpace(baseUrl))
         {
@@ -104,7 +156,8 @@ public class ChatClient
 
     public async Task<string> SendChatAsync(string model, List<ChatMessage> messages, float temperature)
     {
-        var baseUrl = !string.IsNullOrWhiteSpace(_baseUrl) ? _baseUrl : _cfg.ApiBase?.TrimEnd('/');
+        // Get the current service URL dynamically - this ensures we always use the latest port
+        var baseUrl = await GetCurrentServiceUrlAsync();
         
         if (string.IsNullOrWhiteSpace(baseUrl))
         {
@@ -112,12 +165,31 @@ public class ChatClient
             return "Error: No service URL available";
         }
 
+        // Resolve alias to actual loaded model ID if possible
+        string effectiveModel = model;
+        try
+        {
+            if (_foundryService != null)
+            {
+                var mappedId = await _foundryService.GetLoadedModelIdAsync(model);
+                if (!string.IsNullOrWhiteSpace(mappedId))
+                {
+                    DebugLog($"Resolved alias '{model}' to model id '{mappedId}'");
+                    effectiveModel = mappedId;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            DebugLog($"Model ID resolution failed for '{model}': {ex.Message}");
+        }
+
         var url = $"{baseUrl}/v1/chat/completions";
         DebugLog($"Sending chat request to: {url}");
 
         var body = new
         {
-            model,
+            model = effectiveModel,
             messages = messages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
             temperature,
             max_tokens = 2048,
@@ -130,7 +202,7 @@ public class ChatClient
             DebugLog($"Request body: {json.Substring(0, Math.Min(200, json.Length))}...");
             
             var content = new StringContent(json, Encoding.UTF8, "application/json");
-            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(60));
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(5)); // Increased to 5 minutes for longer responses like sonnets
             var response = await _http.PostAsync(url, content, cts.Token);
             
             DebugLog($"Chat response status: {response.StatusCode}");
@@ -163,7 +235,27 @@ public class ChatClient
         catch (Exception ex)
         {
             DebugLog($"Chat request failed: {ex}");
+            
+            // Provide more specific error messages
+            if (ex is TaskCanceledException)
+            {
+                return "Error: Request timed out. The model may be taking too long to respond.";
+            }
+            else if (ex is HttpRequestException)
+            {
+                return $"Error: Network connection failed - {ex.Message}";
+            }
+            else if (ex is System.IO.IOException)
+            {
+                return "Error: Connection was interrupted. Please try again.";
+            }
+            
             return $"Error: {ex.Message}";
         }
+    }
+
+    public void Dispose()
+    {
+        _http?.Dispose();
     }
 }
