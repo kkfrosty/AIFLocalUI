@@ -46,6 +46,12 @@ public partial class MainWindow : Window
                 LblDisk.Text = $"{m.DiskPercent:0}%";
                 PbGpu.Value = m.GpuPercent;
                 LblGpu.Text = $"{m.GpuPercent:0}%";
+                if (!string.IsNullOrWhiteSpace(m.GpuName))
+                    LblGpuName.Text = m.GpuName;
+                if (m.GpuMemTotalMB > 0)
+                    LblGpuMem.Text = $"{m.GpuMemUsedMB:0} / {m.GpuMemTotalMB:0} MB";
+                else
+                    LblGpuMem.Text = string.Empty;
             });
         };
         _monitor.Start();

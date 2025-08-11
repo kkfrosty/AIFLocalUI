@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using AiFoundryUI.Models;
 
@@ -225,8 +226,15 @@ public class ChatClient
                 {
                     if (message.TryGetProperty("content", out var messageContent))
                     {
-                        return messageContent.GetString() ?? "No response content";
+                        var raw = messageContent.GetString() ?? "No response content";
+                        return SanitizeAssistantContent(raw);
                     }
+                }
+                // Fallback: some providers put text in delta.content even on non-stream
+                if (firstChoice.TryGetProperty("delta", out var delta) && delta.TryGetProperty("content", out var deltaContent))
+                {
+                    var raw = deltaContent.GetString() ?? "No response content";
+                    return SanitizeAssistantContent(raw);
                 }
             }
 
@@ -257,5 +265,27 @@ public class ChatClient
     public void Dispose()
     {
         _http?.Dispose();
+    }
+
+    // Extract only the assistant's final message from provider-formatted content
+    private static string SanitizeAssistantContent(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return text;
+
+        // Pattern: <|channel|>final<|message|>...<|return|> (or <|end|>)
+        var m = Regex.Match(text, "<\\|channel\\|>final<\\|message\\|>([\\s\\S]*?)(?:<\\|return\\|>|<\\|end\\|>|$)", RegexOptions.IgnoreCase);
+        if (m.Success)
+        {
+            return m.Groups[1].Value.Trim();
+        }
+
+        // If contains other channels, strip all known tag markers and return remainder
+        if (text.Contains("<|channel|>") || text.Contains("<|message|>") || text.Contains("<|start|>") || text.Contains("<|end|>") || text.Contains("<|return|>"))
+        {
+            var cleaned = Regex.Replace(text, "<\\|(?:start|end|return|channel|message)\\|>", string.Empty, RegexOptions.IgnoreCase);
+            return cleaned.Trim();
+        }
+
+        return text.Trim();
     }
 }

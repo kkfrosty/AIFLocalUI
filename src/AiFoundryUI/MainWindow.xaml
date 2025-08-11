@@ -204,9 +204,10 @@
                         <TextBlock x:Name="LblDisk" Margin="6,0,0,0" FontSize="11" Foreground="#6B7280" Width="35"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="GPU" Margin="0,0,6,0" FontSize="11" Foreground="#6B7280"/>
+                        <TextBlock x:Name="LblGpuName" Text="GPU" Margin="0,0,6,0" FontSize="11" Foreground="#6B7280"/>
                         <ProgressBar x:Name="PbGpu" Width="60" Height="8" Minimum="0" Maximum="100"/>
                         <TextBlock x:Name="LblGpu" Margin="6,0,0,0" FontSize="11" Foreground="#6B7280" Width="35"/>
+                        <TextBlock x:Name="LblGpuMem" Margin="8,0,0,0" FontSize="11" Foreground="#6B7280"/>
                     </StackPanel>
                 </StackPanel>
             </StatusBarItem>
