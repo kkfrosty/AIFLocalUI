@@ -25,6 +25,8 @@ public partial class MainWindow : Window
     private bool _isModelLoaded = false;
     private bool _isChatBusy = false;
     private bool _isServiceRunning = false;
+    private System.Threading.CancellationTokenSource? _chatCts;
+    private System.Threading.CancellationTokenSource? _opCts; // for non-chat operations
 
     public MainWindow()
     {
@@ -495,6 +497,13 @@ public partial class MainWindow : Window
 
     private async void BtnSend_Click(object sender, RoutedEventArgs e)
     {
+        // If currently busy with a chat, treat as cancel
+        if (_isChatBusy)
+        {
+            _chatCts?.Cancel();
+            return;
+        }
+
         var model = CmbModels.SelectedItem as string ?? string.Empty;
         if (string.IsNullOrWhiteSpace(model))
         {
@@ -504,6 +513,7 @@ public partial class MainWindow : Window
         var prompt = TxtPrompt.Text.Trim();
         if (string.IsNullOrEmpty(prompt)) return;
 
+        EnterBusyState("Sending...");
         AppendChat("You", prompt);
         TxtPrompt.Clear();
 
@@ -516,7 +526,8 @@ public partial class MainWindow : Window
                 // Use the model alias directly - ChatClient handles the URL resolution
                 Console.WriteLine($"Sending chat request with model alias: '{model}'");
                 var temp = (float)SldTemp.Value;
-                reply = await _chat.SendChatAsync(model, _messages, temp);
+                _chatCts = new System.Threading.CancellationTokenSource();
+                reply = await _chat.SendChatAsync(model, _messages, temp, _chatCts.Token);
             }
             else
             {
@@ -528,6 +539,12 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             AppendChat("Error", ex.Message);
+        }
+        finally
+        {
+            ExitBusyState();
+            _chatCts?.Dispose();
+            _chatCts = null;
         }
     }
 
@@ -604,10 +621,12 @@ public partial class MainWindow : Window
     
     private async void BtnStartService_Click(object sender, RoutedEventArgs e)
     {
+        EnterBusyState("Starting service...");
+        _opCts = new System.Threading.CancellationTokenSource();
         UpdateStatus("Starting service...");
         try
         {
-            var serviceUrl = await _foundryService.StartServiceAsync();
+            var serviceUrl = await _foundryService.StartServiceAsync(_opCts.Token);
             if (!string.IsNullOrWhiteSpace(serviceUrl))
             {
                 TxtServiceUrl.Text = serviceUrl;
@@ -626,14 +645,21 @@ public partial class MainWindow : Window
             UpdateStatus("Service start failed");
             Log($"[error] Service start error: {ex.Message}");
         }
+        finally
+        {
+            ExitBusyState();
+            _opCts?.Dispose(); _opCts = null;
+        }
     }
 
     private async void BtnStopService_Click(object sender, RoutedEventArgs e)
     {
+        EnterBusyState("Stopping service...");
+        _opCts = new System.Threading.CancellationTokenSource();
         UpdateStatus("Stopping service...");
         try
         {
-            var result = await _foundryService.StopServiceAsync();
+            var result = await _foundryService.StopServiceAsync(_opCts.Token);
             if (result)
             {
                 TxtServiceUrl.Text = "";
@@ -658,19 +684,26 @@ public partial class MainWindow : Window
             UpdateStatus("Service stop failed");
             Log($"[error] Service stop error: {ex.Message}");
         }
+        finally
+        {
+            ExitBusyState();
+            _opCts?.Dispose(); _opCts = null;
+        }
     }
 
     private async void BtnRestartService_Click(object sender, RoutedEventArgs e)
     {
+        EnterBusyState("Restarting service...");
+        _opCts = new System.Threading.CancellationTokenSource();
         UpdateStatus("Restarting service...");
         try
         {
             // Stop first
-            await _foundryService.StopServiceAsync();
+            await _foundryService.StopServiceAsync(_opCts.Token);
             await Task.Delay(2000); // Wait a bit
             
             // Start again
-            var serviceUrl = await _foundryService.StartServiceAsync();
+            var serviceUrl = await _foundryService.StartServiceAsync(_opCts.Token);
             if (!string.IsNullOrWhiteSpace(serviceUrl))
             {
                 TxtServiceUrl.Text = serviceUrl;
@@ -698,6 +731,11 @@ public partial class MainWindow : Window
             UpdateStatus("Restart failed");
             Log($"[error] Service restart error: {ex.Message}");
         }
+        finally
+        {
+            ExitBusyState();
+            _opCts?.Dispose(); _opCts = null;
+        }
     }
 
     // ===== MODEL MANAGEMENT HANDLERS =====
@@ -711,10 +749,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        EnterBusyState($"Loading {selectedModel}...");
+        _opCts = new System.Threading.CancellationTokenSource();
         UpdateStatus("Loading model...");
         try
         {
-            var result = await _foundryService.LoadModelAsync(selectedModel);
+            var result = await _foundryService.LoadModelAsync(selectedModel, _opCts.Token);
             if (result)
             {
                 _currentModel = selectedModel;
@@ -736,6 +776,11 @@ public partial class MainWindow : Window
             UpdateStatus("Model load failed");
             Log($"[error] Model load error: {ex.Message}");
         }
+        finally
+        {
+            ExitBusyState();
+            _opCts?.Dispose(); _opCts = null;
+        }
     }
 
     private async void BtnUnloadModel_Click(object sender, RoutedEventArgs e)
@@ -746,10 +791,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        EnterBusyState("Unloading model...");
+        _opCts = new System.Threading.CancellationTokenSource();
         UpdateStatus("Unloading model...");
         try
         {
-            var result = await _foundryService.UnloadModelAsync(_currentModel);
+            var result = await _foundryService.UnloadModelAsync(_currentModel, _opCts.Token);
             if (result)
             {
                 var previousModel = _currentModel;
@@ -772,6 +819,25 @@ public partial class MainWindow : Window
             UpdateStatus("Model unload failed");
             Log($"[error] Model unload error: {ex.Message}");
         }
+        finally
+        {
+            ExitBusyState();
+            _opCts?.Dispose(); _opCts = null;
+        }
+    }
+
+    private void BtnBusyCancel_Click(object sender, RoutedEventArgs e)
+    {
+        // Prefer chat cancel when active
+        if (_isChatBusy && _chatCts != null)
+        {
+            _chatCts.Cancel();
+            return;
+        }
+
+        // Otherwise cancel non-chat operation by killing last process
+        _opCts?.Cancel();
+        _foundryService.CancelLastOperation();
     }
 
     // ===== UI STATE HELPERS =====
@@ -812,7 +878,49 @@ public partial class MainWindow : Window
         {
             BtnLoadModel.IsEnabled = !string.IsNullOrEmpty(CmbModels.SelectedItem as string);
             BtnUnloadModel.IsEnabled = _isModelLoaded && !string.IsNullOrEmpty(_currentModel);
-            BtnSend.IsEnabled = _isModelLoaded;
+            BtnSend.IsEnabled = _isModelLoaded && !_isChatBusy;
+        });
+    }
+
+    // ===== Busy state helpers =====
+    private void EnterBusyState(string? message = null)
+    {
+        _isChatBusy = true;
+        Dispatcher.Invoke(() =>
+        {
+            BusyOverlay.Visibility = Visibility.Visible;
+            // Disable most controls
+            TxtPrompt.IsReadOnly = true;
+            CmbModels.IsEnabled = false;
+            BtnLoadModel.IsEnabled = false;
+            BtnUnloadModel.IsEnabled = false;
+            BtnStartService.IsEnabled = false;
+            BtnStopService.IsEnabled = false;
+            BtnRestartService.IsEnabled = false;
+            BtnRefreshModels.IsEnabled = false;
+            BtnOpenConfig.IsEnabled = false;
+            // Toggle Send to Cancel
+            BtnSend.Content = "Cancel";
+            BtnSend.IsEnabled = true; // allow cancel
+        });
+    }
+
+    private void ExitBusyState()
+    {
+        _isChatBusy = false;
+        Dispatcher.Invoke(() =>
+        {
+            BusyOverlay.Visibility = Visibility.Collapsed;
+            // Re-enable controls according to state
+            TxtPrompt.IsReadOnly = false;
+            CmbModels.IsEnabled = true;
+            BtnStartService.IsEnabled = !_isServiceRunning;
+            BtnStopService.IsEnabled = _isServiceRunning;
+            BtnRestartService.IsEnabled = _isServiceRunning;
+            BtnRefreshModels.IsEnabled = true;
+            BtnOpenConfig.IsEnabled = true;
+            BtnSend.Content = "Send";
+            UpdateUIState();
         });
     }
 }

@@ -6,6 +6,7 @@ namespace AiFoundryUI.Services;
 public class FoundryService
 {
     private readonly Action<string> _log;
+    private Process? _lastProcess;
 
     public FoundryService(Action<string> log)
     {
@@ -19,7 +20,7 @@ public class FoundryService
         _log(logMessage);
     }
 
-    private async Task<(int exitCode, string output, string error)> RunFoundryCommandAsync(string command)
+    public async Task<(int exitCode, string output, string error)> RunFoundryCommandAsync(string command, System.Threading.CancellationToken? token = null)
     {
         DebugLog($"Executing: foundry {command}");
 
@@ -40,9 +41,22 @@ public class FoundryService
         try
         {
             var process = Process.Start(psi)!;
+            _lastProcess = process;
             var output = await process.StandardOutput.ReadToEndAsync();
             var error = await process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
+            if (token.HasValue)
+            {
+                try { await process.WaitForExitAsync(token.Value); }
+                catch (TaskCanceledException)
+                {
+                    TryKillProcessTree(process);
+                    throw;
+                }
+            }
+            else
+            {
+                await process.WaitForExitAsync();
+            }
 
             DebugLog($"Exit code: {process.ExitCode}");
             if (!string.IsNullOrWhiteSpace(output))
@@ -59,12 +73,28 @@ public class FoundryService
         }
     }
 
+    private void TryKillProcessTree(Process p)
+    {
+        try
+        {
+            if (!p.HasExited) p.Kill(true);
+        }
+        catch { /* ignore */ }
+    }
+
+    public void CancelLastOperation()
+    {
+        var p = _lastProcess;
+        if (p == null) return;
+        TryKillProcessTree(p);
+    }
+
     /// <summary>
     /// Check if foundry service is running. Returns (isRunning, serviceUrl)
     /// </summary>
-    public async Task<(bool isRunning, string? serviceUrl)> GetServiceStatusAsync()
+    public async Task<(bool isRunning, string? serviceUrl)> GetServiceStatusAsync(System.Threading.CancellationToken? token = null)
     {
-        var (exitCode, output, error) = await RunFoundryCommandAsync("service status");
+        var (exitCode, output, error) = await RunFoundryCommandAsync("service status", token);
         
         if (exitCode == 0)
         {
@@ -96,10 +126,10 @@ public class FoundryService
     /// <summary>
     /// Start the foundry service. Returns the service URL if successful.
     /// </summary>
-    public async Task<string?> StartServiceAsync()
+    public async Task<string?> StartServiceAsync(System.Threading.CancellationToken? token = null)
     {
         DebugLog("Starting foundry service...");
-        var (exitCode, output, error) = await RunFoundryCommandAsync("service start");
+        var (exitCode, output, error) = await RunFoundryCommandAsync("service start", token);
         
         if (exitCode == 0)
         {
@@ -130,9 +160,9 @@ public class FoundryService
     /// <summary>
     /// Get list of all available model aliases (both cached and downloadable)
     /// </summary>
-    public async Task<List<string>> GetAvailableModelsAsync()
+    public async Task<List<string>> GetAvailableModelsAsync(System.Threading.CancellationToken? token = null)
     {
-        var (exitCode, output, error) = await RunFoundryCommandAsync("model list");
+        var (exitCode, output, error) = await RunFoundryCommandAsync("model list", token);
         
         if (exitCode != 0)
         {
@@ -174,9 +204,9 @@ public class FoundryService
     /// <summary>
     /// Get list of cached models
     /// </summary>
-    public async Task<List<string>> GetCachedModelsAsync()
+    public async Task<List<string>> GetCachedModelsAsync(System.Threading.CancellationToken? token = null)
     {
-        var (exitCode, output, error) = await RunFoundryCommandAsync("cache list");
+        var (exitCode, output, error) = await RunFoundryCommandAsync("cache list", token);
         
         if (exitCode != 0)
         {
@@ -219,7 +249,7 @@ public class FoundryService
     /// <summary>
     /// Download a model with progress reporting
     /// </summary>
-    public async Task<bool> DownloadModelAsync(string modelAlias, IProgress<string>? progressCallback = null)
+    public async Task<bool> DownloadModelAsync(string modelAlias, IProgress<string>? progressCallback = null, System.Threading.CancellationToken? token = null)
     {
         DebugLog($"Starting download of model: {modelAlias}");
         
@@ -240,10 +270,16 @@ public class FoundryService
         try
         {
             var process = Process.Start(psi)!;
+            _lastProcess = process;
             
             // Read output line by line for progress updates
             while (!process.StandardOutput.EndOfStream)
             {
+                if (token.HasValue && token.Value.IsCancellationRequested)
+                {
+                    TryKillProcessTree(process);
+                    throw new TaskCanceledException();
+                }
                 var line = await process.StandardOutput.ReadLineAsync();
                 if (!string.IsNullOrWhiteSpace(line))
                 {
@@ -252,7 +288,19 @@ public class FoundryService
                 }
             }
             
-            await process.WaitForExitAsync();
+            if (token.HasValue)
+            {
+                try { await process.WaitForExitAsync(token.Value); }
+                catch (TaskCanceledException)
+                {
+                    TryKillProcessTree(process);
+                    throw;
+                }
+            }
+            else
+            {
+                await process.WaitForExitAsync();
+            }
             
             var success = process.ExitCode == 0;
             DebugLog($"Download completed. Success: {success}");
@@ -268,10 +316,10 @@ public class FoundryService
     /// <summary>
     /// Load a model
     /// </summary>
-    public async Task<bool> LoadModelAsync(string modelAlias)
+    public async Task<bool> LoadModelAsync(string modelAlias, System.Threading.CancellationToken? token = null)
     {
         DebugLog($"Loading model: {modelAlias}");
-        var (exitCode, output, error) = await RunFoundryCommandAsync($"model load {modelAlias}");
+        var (exitCode, output, error) = await RunFoundryCommandAsync($"model load {modelAlias}", token);
         
         var success = exitCode == 0 && output.Contains("loaded successfully");
         DebugLog($"Model load result: {success}");
@@ -281,10 +329,10 @@ public class FoundryService
     /// <summary>
     /// Get the actual model ID for a loaded model alias
     /// </summary>
-    public async Task<string?> GetLoadedModelIdAsync(string modelAlias)
+    public async Task<string?> GetLoadedModelIdAsync(string modelAlias, System.Threading.CancellationToken? token = null)
     {
         DebugLog($"Getting loaded model ID for alias: {modelAlias}");
-        var (exitCode, output, error) = await RunFoundryCommandAsync("service list");
+        var (exitCode, output, error) = await RunFoundryCommandAsync("service list", token);
         
         if (exitCode != 0)
         {
@@ -331,10 +379,10 @@ public class FoundryService
     /// <summary>
     /// Get list of currently loaded models using "foundry service list"
     /// </summary>
-    public async Task<List<string>> GetCurrentlyLoadedModelsAsync()
+    public async Task<List<string>> GetCurrentlyLoadedModelsAsync(System.Threading.CancellationToken? token = null)
     {
         DebugLog("Getting currently loaded models with 'foundry service list'");
-        var (exitCode, output, error) = await RunFoundryCommandAsync("service list");
+        var (exitCode, output, error) = await RunFoundryCommandAsync("service list", token);
         
         if (exitCode != 0)
         {
@@ -388,10 +436,10 @@ public class FoundryService
     /// <summary>
     /// Stop the foundry service
     /// </summary>
-    public async Task<bool> StopServiceAsync()
+    public async Task<bool> StopServiceAsync(System.Threading.CancellationToken? token = null)
     {
         DebugLog("Stopping foundry service...");
-        var (exitCode, output, error) = await RunFoundryCommandAsync("service stop");
+        var (exitCode, output, error) = await RunFoundryCommandAsync("service stop", token);
         
         var success = exitCode == 0;
         if (success)
@@ -408,10 +456,10 @@ public class FoundryService
     /// <summary>
     /// Unload a model
     /// </summary>
-    public async Task<bool> UnloadModelAsync(string modelAlias)
+    public async Task<bool> UnloadModelAsync(string modelAlias, System.Threading.CancellationToken? token = null)
     {
         DebugLog($"Unloading model: {modelAlias}");
-        var (exitCode, output, error) = await RunFoundryCommandAsync($"model unload {modelAlias}");
+        var (exitCode, output, error) = await RunFoundryCommandAsync($"model unload {modelAlias}", token);
         
         var success = exitCode == 0;
         DebugLog($"Model unload result: {success}");

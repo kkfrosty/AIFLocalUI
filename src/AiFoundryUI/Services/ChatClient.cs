@@ -155,7 +155,7 @@ public class ChatClient
         return results;
     }
 
-    public async Task<string> SendChatAsync(string model, List<ChatMessage> messages, float temperature)
+    public async Task<string> SendChatAsync(string model, List<ChatMessage> messages, float temperature, System.Threading.CancellationToken? externalToken = null)
     {
         // Get the current service URL dynamically - this ensures we always use the latest port
         var baseUrl = await GetCurrentServiceUrlAsync();
@@ -203,19 +203,20 @@ public class ChatClient
             DebugLog($"Request body: {json.Substring(0, Math.Min(200, json.Length))}...");
             
             var content = new StringContent(json, Encoding.UTF8, "application/json");
-            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(5)); // Increased to 5 minutes for longer responses like sonnets
-            var response = await _http.PostAsync(url, content, cts.Token);
+            using var defaultCts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(5));
+            var token = externalToken.HasValue ? System.Threading.CancellationTokenSource.CreateLinkedTokenSource(defaultCts.Token, externalToken.Value).Token : defaultCts.Token;
+            var response = await _http.PostAsync(url, content, token);
             
             DebugLog($"Chat response status: {response.StatusCode}");
             
             if (!response.IsSuccessStatusCode)
             {
-                var errorContent = await response.Content.ReadAsStringAsync(cts.Token);
+                var errorContent = await response.Content.ReadAsStringAsync(token);
                 DebugLog($"Chat error response: {errorContent}");
                 return $"Error {response.StatusCode}: {errorContent}";
             }
 
-            var responseJson = await response.Content.ReadAsStringAsync(cts.Token);
+            var responseJson = await response.Content.ReadAsStringAsync(token);
             DebugLog($"Chat response: {responseJson.Substring(0, Math.Min(200, responseJson.Length))}...");
             
             using var doc = JsonDocument.Parse(responseJson);
@@ -240,14 +241,16 @@ public class ChatClient
 
             return "Error: Unexpected response format";
         }
-        catch (Exception ex)
+    catch (Exception ex)
         {
             DebugLog($"Chat request failed: {ex}");
             
             // Provide more specific error messages
             if (ex is TaskCanceledException)
             {
-                return "Error: Request timed out. The model may be taking too long to respond.";
+        return externalToken.HasValue && externalToken.Value.IsCancellationRequested
+            ? "Cancelled."
+            : "Error: Request timed out. The model may be taking too long to respond.";
             }
             else if (ex is HttpRequestException)
             {

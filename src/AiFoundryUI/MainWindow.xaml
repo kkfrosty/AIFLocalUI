@@ -215,6 +215,17 @@
                 <TextBlock x:Name="LblHealth" Foreground="#6B7280" FontSize="11"/>
             </StatusBarItem>
         </StatusBar>
+        
+        <!-- Busy overlay covering entire window when operations are running -->
+    <Grid x:Name="BusyOverlay" Grid.RowSpan="5" Background="#80000000" Visibility="Collapsed" Panel.ZIndex="9999">
+            <Border Background="#FFFFFFFF" CornerRadius="8" Padding="16" HorizontalAlignment="Center" VerticalAlignment="Center" BorderBrush="#E5E7EB" BorderThickness="1">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center" >
+                    <ProgressBar IsIndeterminate="True" Width="120" Height="8" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="BusyText" Text=" Working..." Margin="12,0,0,0" FontSize="12" Foreground="#374151"/>
+                    <Button x:Name="BtnBusyCancel" Content="Cancel" Margin="16,0,0,0" Padding="12,4" Click="BtnBusyCancel_Click"/>
+                </StackPanel>
+            </Border>
+        </Grid>
     </Grid>
     
 </Window>
