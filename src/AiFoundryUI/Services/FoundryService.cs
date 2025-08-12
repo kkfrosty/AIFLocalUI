@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using AiFoundryUI.Services;
 
 namespace AiFoundryUI.Services;
 
@@ -16,27 +17,25 @@ public class FoundryService
     private void DebugLog(string message)
     {
         var logMessage = $"[FoundryService] {message}";
-        Console.WriteLine(logMessage);
+    Logger.Log(logMessage);
         _log(logMessage);
     }
 
     public async Task<(int exitCode, string output, string error)> RunFoundryCommandAsync(string command, System.Threading.CancellationToken? token = null)
     {
         DebugLog($"Executing: foundry {command}");
-
         var psi = new ProcessStartInfo
         {
-            FileName = "powershell.exe",
+            FileName = "foundry", // rely on PATH resolution
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden,
         };
-        psi.ArgumentList.Add("-NoProfile");
-        psi.ArgumentList.Add("-ExecutionPolicy");
-        psi.ArgumentList.Add("Bypass");
-        psi.ArgumentList.Add("-Command");
-        psi.ArgumentList.Add($"foundry {command}");
+        // Split command into args (simple split by space; enhance if quoting needed later)
+        foreach (var part in command.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            psi.ArgumentList.Add(part);
 
         try
         {
@@ -252,20 +251,18 @@ public class FoundryService
     public async Task<bool> DownloadModelAsync(string modelAlias, IProgress<string>? progressCallback = null, System.Threading.CancellationToken? token = null)
     {
         DebugLog($"Starting download of model: {modelAlias}");
-        
         var psi = new ProcessStartInfo
         {
-            FileName = "powershell.exe",
+            FileName = "foundry",
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden,
         };
-        psi.ArgumentList.Add("-NoProfile");
-        psi.ArgumentList.Add("-ExecutionPolicy");
-        psi.ArgumentList.Add("Bypass");
-        psi.ArgumentList.Add("-Command");
-        psi.ArgumentList.Add($"foundry model download {modelAlias}");
+        psi.ArgumentList.Add("model");
+        psi.ArgumentList.Add("download");
+        psi.ArgumentList.Add(modelAlias);
 
         try
         {
@@ -415,16 +412,18 @@ public class FoundryService
             // Extract the alias (second column) and model ID (third column)
             if (line.Contains("🟢"))
             {
-                var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                // Normalize whitespace
+                var collapsed = Regex.Replace(line, "\\s+", " ").Trim();
+                var parts = collapsed.Split(' ');
                 if (parts.Length >= 3)
                 {
-                    // The format is typically: [icon] [alias] [model-id]
-                    // We want to return the alias, but could also return the model ID
-                    var alias = parts[1];
-                    var modelId = parts[2];
-                    
-                    loadedModels.Add(alias);
-                    DebugLog($"Found loaded model: {alias} (ID: {modelId})");
+                    var alias = parts[1].Trim();
+                    var modelId = parts[2].Trim();
+                    if (!string.IsNullOrWhiteSpace(alias))
+                    {
+                        loadedModels.Add(alias);
+                        DebugLog($"Found loaded model: '{alias}' (ID: {modelId})");
+                    }
                 }
             }
         }

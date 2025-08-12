@@ -7,6 +7,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using AiFoundryUI.Services;
 using System.Threading.Tasks;
 using AiFoundryUI.Models;
 
@@ -46,7 +47,7 @@ public class ChatClient
     public void SetBaseUrl(string baseUrl)
     {
         _baseUrl = baseUrl?.TrimEnd('/');
-        Console.WriteLine($"[ChatClient] Base URL set to: {_baseUrl}");
+    Logger.Log($"[ChatClient] Base URL set to: {_baseUrl}");
     }
 
     /// <summary>
@@ -84,8 +85,8 @@ public class ChatClient
 
     private void DebugLog(string message)
     {
-        var logMessage = $"[ChatClient] {message}";
-        Console.WriteLine(logMessage);
+    var logMessage = $"[ChatClient] {message}";
+    Logger.Log(logMessage);
     }
 
     public async Task<bool> HealthOkAsync()

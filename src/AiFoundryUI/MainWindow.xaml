@@ -7,6 +7,10 @@
         mc:Ignorable="d"
         Title="AI Foundry Local" Height="800" Width="1000" WindowStartupLocation="CenterScreen">
     <Grid Background="#F8F9FA">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="ThreadPaneColumn" Width="260"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -16,7 +20,7 @@
         </Grid.RowDefinitions>
 
         <!-- Enhanced top bar with service management -->
-        <Border Grid.Row="0" Background="White" BorderBrush="#E1E5E9" BorderThickness="0,0,0,1" Padding="20,12">
+        <Border Grid.Row="0" Grid.ColumnSpan="2" Background="White" BorderBrush="#E1E5E9" BorderThickness="0,0,0,1" Padding="20,12">
             <DockPanel>
                 <!-- Left: App branding -->
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" VerticalAlignment="Center">
@@ -61,8 +65,42 @@
             </DockPanel>
         </Border>
 
+        <!-- Thread / History Pane -->
+        <Grid Grid.Row="1" Grid.Column="0" Grid.RowSpan="3">
+            <!-- Expanded pane -->
+            <Border x:Name="ExpandedThreadPane" Background="#FFFFFF" BorderBrush="#E1E5E9" BorderThickness="0,0,1,0">
+                <DockPanel>
+                    <!-- Header with image + collapse toggle -->
+                    <Border DockPanel.Dock="Top" Background="#F3F4F6" BorderBrush="#E5E7EB" BorderThickness="0,0,0,1" Padding="12,10" >
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel x:Name="ThreadHeaderContent" Orientation="Horizontal" Grid.Column="0">
+                                <TextBlock Text="🧵" FontSize="20" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBlock Text="Threads" FontWeight="SemiBold" VerticalAlignment="Center" FontSize="14"/>
+                            </StackPanel>
+                            <Button x:Name="BtnToggleThreadPane" Grid.Column="1" Content="⮜" Width="28" Height="28" Click="BtnToggleThreadPane_Click" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"/>
+                        </Grid>
+                    </Border>
+                    <StackPanel x:Name="NewThreadPanel" DockPanel.Dock="Top" Orientation="Vertical" Margin="12" >
+                        <Button x:Name="BtnNewThread" Content="＋ New Chat" Padding="10,6" Margin="0,0,0,12" Background="#3B82F6" Foreground="White" BorderThickness="0" Click="BtnNewThread_Click"/>
+                    </StackPanel>
+                    <ListBox x:Name="LstThreads" DisplayMemberPath="Title" Margin="8,0,8,8" SelectionChanged="LstThreads_SelectionChanged"/>
+                </DockPanel>
+            </Border>
+            <!-- Collapsed mini pane -->
+            <Border x:Name="CollapsedThreadPane" Background="#FFFFFF" BorderBrush="#E1E5E9" BorderThickness="0,0,1,0" Width="56" Visibility="Collapsed">
+                <StackPanel>
+                    <Button x:Name="BtnExpandThreadPane" Content="🤖" Margin="4" Padding="4" Click="BtnToggleThreadPane_Click" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"/>
+                    <Button x:Name="BtnNewThreadCollapsed" Content="📝" Margin="4,8,4,0" Padding="4" ToolTip="New Chat" Click="BtnNewThread_Click" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
         <!-- Main chat area -->
-        <Grid Grid.Row="1" Margin="0">
+        <Grid Grid.Row="1" Grid.Column="1" Margin="0">
             <ScrollViewer x:Name="ChatScrollViewer" VerticalScrollBarVisibility="Auto" Padding="20" Background="White">
                 <StackPanel x:Name="ChatMessages" />
             </ScrollViewer>
@@ -75,7 +113,7 @@
         </Grid>
 
         <!-- Chat input area -->
-        <Border Grid.Row="2" Background="White" BorderBrush="#E1E5E9" BorderThickness="0,1,0,0" Padding="20,16">
+    <Border Grid.Row="2" Grid.Column="1" Background="White" BorderBrush="#E1E5E9" BorderThickness="0,1,0,0" Padding="20,16">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -111,7 +149,7 @@
         </Border>
 
         <!-- Model management section (separate from service) -->
-        <Border Grid.Row="3" Background="#F8F9FA" BorderBrush="#E1E5E9" BorderThickness="0,1,0,0" Padding="20,16">
+    <Border Grid.Row="3" Grid.Column="1" Background="#F8F9FA" BorderBrush="#E1E5E9" BorderThickness="0,1,0,0" Padding="20,16">
             <StackPanel>
                 <!-- Model controls row -->
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,12">
@@ -123,22 +161,9 @@
                               SelectionChanged="CmbModels_SelectionChanged"/>
                     
                     <!-- Model Load/Unload buttons -->
-                    <Button x:Name="BtnLoadModel" 
-                            Content="Load Model" 
-                            Background="#3B82F6" 
-                            Foreground="White" 
-                            BorderThickness="0" 
-                            Padding="16,6" 
-                            Margin="0,0,8,0"
-                            Click="BtnLoadModel_Click"/>
-                    <Button x:Name="BtnUnloadModel" 
-                            Content="Unload Model" 
-                            Background="#EF4444" 
-                            Foreground="White" 
-                            BorderThickness="0" 
-                            Padding="16,6" 
-                            Margin="0,0,16,0"
-                            Click="BtnUnloadModel_Click"/>
+                    <!-- Load/Unload buttons hidden; model management now automatic -->
+                    <Button x:Name="BtnLoadModel" Visibility="Collapsed"/>
+                    <Button x:Name="BtnUnloadModel" Visibility="Collapsed"/>
                     
                     <!-- Temperature control -->
                     <StackPanel Orientation="Horizontal" Margin="16,0,0,0">
@@ -185,7 +210,7 @@
         </Border>
 
         <!-- System metrics status bar -->
-        <StatusBar Grid.Row="4" Background="#F8F9FA" BorderBrush="#E1E5E9" BorderThickness="0,1,0,0" Padding="20,8">
+    <StatusBar Grid.Row="4" Grid.ColumnSpan="2" Background="#F8F9FA" BorderBrush="#E1E5E9" BorderThickness="0,1,0,0" Padding="20,8">
             <StatusBarItem>
                 <StackPanel Orientation="Horizontal">
                     <StackPanel Orientation="Horizontal" Margin="0,0,24,0">
@@ -217,7 +242,7 @@
         </StatusBar>
         
         <!-- Busy overlay covering entire window when operations are running -->
-    <Grid x:Name="BusyOverlay" Grid.RowSpan="5" Background="#80000000" Visibility="Collapsed" Panel.ZIndex="9999">
+    <Grid x:Name="BusyOverlay" Grid.RowSpan="5" Grid.ColumnSpan="2" Background="#80000000" Visibility="Collapsed" Panel.ZIndex="9999">
             <Border Background="#FFFFFFFF" CornerRadius="8" Padding="16" HorizontalAlignment="Center" VerticalAlignment="Center" BorderBrush="#E5E7EB" BorderThickness="1">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center" >
                     <ProgressBar IsIndeterminate="True" Width="120" Height="8" VerticalAlignment="Center"/>

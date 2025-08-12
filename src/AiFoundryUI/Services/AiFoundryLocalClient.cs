@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.Http;
 using System.Text.Json;
 using AiFoundryUI.Models;
+using AiFoundryUI.Services;
 
 namespace AiFoundryUI.Services;
 
@@ -19,13 +20,13 @@ public class AiFoundryLocalClient
     public void SetBaseUrl(string baseUrl)
     {
         _baseUrl = baseUrl?.TrimEnd('/');
-        Console.WriteLine($"[AiFoundryLocalClient] Base URL set to: {_baseUrl}");
+    Logger.Log($"[AiFoundryLocalClient] Base URL set to: {_baseUrl}");
     }
 
     private void DebugLog(string message)
     {
         var logMessage = $"[AiFoundryLocalClient] {message}";
-        Console.WriteLine(logMessage);
+    Logger.Log(logMessage);
         _log(logMessage);
     }
 

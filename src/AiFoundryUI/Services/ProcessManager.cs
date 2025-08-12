@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using AiFoundryUI.Models;
+using AiFoundryUI.Services;
 
 namespace AiFoundryUI.Services;
 
@@ -21,7 +22,7 @@ public class ProcessManager
     private void DebugLog(string message)
     {
         var logMessage = $"[ProcessManager] {message}";
-        Console.WriteLine(logMessage);
+    Logger.Log(logMessage);
         _log(logMessage);
     }
 
@@ -96,7 +97,7 @@ public class ProcessManager
                 if (e.Data != null) 
                 {
                     var outputMsg = "[STDOUT] " + e.Data;
-                    Console.WriteLine(outputMsg);
+                    Logger.Log(outputMsg);
                     _log("[out] " + e.Data);
                     _onOutput(e.Data);
                 }
@@ -105,14 +106,14 @@ public class ProcessManager
                 if (e.Data != null) 
                 {
                     var errorMsg = "[STDERR] " + e.Data;
-                    Console.WriteLine(errorMsg);
+                    Logger.Log(errorMsg);
                     _log("[err] " + e.Data);
                     _onOutput(e.Data);
                 }
             };
             _proc.Exited += (s, e) => {
                 var exitMsg = $"[EXIT] Process exited with code: {_proc?.ExitCode}";
-                Console.WriteLine(exitMsg);
+                Logger.Log(exitMsg);
                 _log("[info] Process exited.");
             };
             

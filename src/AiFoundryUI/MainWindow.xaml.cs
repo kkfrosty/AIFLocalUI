@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using AiFoundryUI.Models;
 using AiFoundryUI.Services;
+using System.Linq;
 
 namespace AiFoundryUI;
 
@@ -27,6 +28,20 @@ public partial class MainWindow : Window
     private bool _isServiceRunning = false;
     private System.Threading.CancellationTokenSource? _chatCts;
     private System.Threading.CancellationTokenSource? _opCts; // for non-chat operations
+
+    // Simple in-memory thread model (will later move to persistence)
+    private class ChatThread
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public string Title { get; set; } = "New Chat";
+        public List<ChatMessage> Messages { get; set; } = new();
+        public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
+        public DateTime UpdatedUtc { get; set; } = DateTime.UtcNow;
+        public override string ToString() => Title;
+    }
+    private readonly List<ChatThread> _threads = new();
+    private ChatThread? _activeThread;
+    private bool _isRefreshingThreads = false; // suppress selection reload side-effects
 
     public MainWindow()
     {
@@ -65,6 +80,8 @@ public partial class MainWindow : Window
         
         // Setup temperature slider value display
         SldTemp.ValueChanged += (s, e) => LblTemp.Text = $"{e.NewValue:0.0}";
+
+    InitializeThreads();
     }
 
     // Event handlers for new UI elements
@@ -108,7 +125,7 @@ public partial class MainWindow : Window
     {
         // This method is no longer needed with the new FoundryService architecture
         // The FoundryService handles all CLI output processing internally
-        Console.WriteLine($"Legacy OnProcessOutput called: {output}");
+    Logger.Log($"Legacy OnProcessOutput called: {output}");
     }
 
     private void ParseAndDisplayProgress(string output)
@@ -241,14 +258,60 @@ public partial class MainWindow : Window
             // Step 4: Now get available models from foundry cache
             UpdateStatus("Loading available models...");
             var models = await _foundryService.GetAvailableModelsAsync();
-            
+            var loadedModels = await _foundryService.GetCurrentlyLoadedModelsAsync();
+            System.Diagnostics.Debug.WriteLine($"[startup] Available models: {string.Join(", ", models)} | Loaded: {string.Join(", ", loadedModels)}");
+            // Ensure any loaded alias not present gets included so user sees it
+            if (loadedModels.Count > 0)
+            {
+                var merged = models.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var lm in loadedModels)
+                    if (!merged.Contains(lm)) merged.Add(lm);
+                models = merged.OrderBy(m=>m).ToList();
+            }
             if (models?.Count > 0)
             {
                 Dispatcher.Invoke(() =>
                 {
                     CmbModels.ItemsSource = models;
-                    if (CmbModels.SelectedIndex < 0)
+                    if (loadedModels.Count > 0)
+                    {
+                        var normLoaded = loadedModels
+                            .Select(l => l.Trim())
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+                        // Prefer exact (case-insensitive) alias match
+                        var match = models.FirstOrDefault(m => normLoaded.Any(l => string.Equals(l, m, StringComparison.OrdinalIgnoreCase)));
+                        // Fallback: if only one loaded model, just use it even if not in models list
+                        if (match == null && normLoaded.Count == 1)
+                        {
+                            match = normLoaded[0];
+                            if (!models.Any(m => string.Equals(m, match, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                models = models.Concat(new[]{ match }).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(m=>m).ToList();
+                                CmbModels.ItemsSource = models; // refresh datasource with added alias
+                            }
+                        }
+                        // Secondary fallback: partial contains (handles truncated/variant names)
+                        match ??= models.FirstOrDefault(m => normLoaded.Any(l => l.Contains(m, StringComparison.OrdinalIgnoreCase) || m.Contains(l, StringComparison.OrdinalIgnoreCase)));
+
+                        if (match != null)
+                        {
+                            CmbModels.SelectedItem = match;
+                            _currentModel = match;
+                            _isModelLoaded = true;
+                            UpdateCurrentModelDisplay();
+                            UpdateStatus($"Model loaded: {match}");
+                            TxtCurrentModel.Text = $"Model: {match}"; // ensure label reflects
+                        }
+                        else if (CmbModels.SelectedIndex < 0)
+                        {
+                            CmbModels.SelectedIndex = 0;
+                        }
+                    }
+                    else if (CmbModels.SelectedIndex < 0)
+                    {
                         CmbModels.SelectedIndex = 0;
+                    }
                 });
                 Log($"[info] Loaded {models.Count} models: {string.Join(", ", models)}");
                 UpdateStatus("Ready - Select a model and click Start");
@@ -270,8 +333,8 @@ public partial class MainWindow : Window
     {
         // For the new clean UI, we'll only show important status updates
         // Verbose logs are no longer displayed in the UI
-        System.Diagnostics.Debug.WriteLine($"[AI Foundry] {msg}");
-        Console.WriteLine($"[AI Foundry] {msg}"); // Add console output for debugging
+    System.Diagnostics.Debug.WriteLine($"[AI Foundry] {msg}");
+    Logger.Log($"[AI Foundry] {msg}");
         
         // Show only important status messages in the status area
         if (msg.Contains("[error]"))
@@ -311,14 +374,14 @@ public partial class MainWindow : Window
 
     private async void BtnStart_Click(object sender, RoutedEventArgs e)
     {
-        Console.WriteLine("=== START BUTTON CLICKED ===");
+    Logger.Log("=== START BUTTON CLICKED ===");
         
         var selectedModel = CmbModels.SelectedItem as string ?? string.Empty;
-        Console.WriteLine($"Selected model: '{selectedModel}'");
+    Logger.Log($"Selected model: '{selectedModel}'");
         
         if (string.IsNullOrWhiteSpace(selectedModel))
         {
-            Console.WriteLine("ERROR: No model selected");
+            Logger.Log("ERROR: No model selected");
             MessageBox.Show("Select a model first.", "Missing model");
             return;
         }
@@ -328,19 +391,19 @@ public partial class MainWindow : Window
             // Step 1: Check if model is cached (downloaded)
             UpdateStatus("Checking if model is cached...");
             bool isCached = await _foundryService.IsModelCachedAsync(selectedModel);
-            Console.WriteLine($"Model {selectedModel} cached: {isCached}");
+            Logger.Log($"Model {selectedModel} cached: {isCached}");
 
             // Step 2: If not cached, download it first
             if (!isCached)
             {
-                Console.WriteLine($"Model {selectedModel} not cached, starting download...");
+                Logger.Log($"Model {selectedModel} not cached, starting download...");
                 UpdateStatus($"Downloading {selectedModel}...");
                 ShowProgress($"Downloading {selectedModel}...", null);
                 
                 // Set up progress callback to show download progress
                 var progress = new Progress<string>(output =>
                 {
-                    Console.WriteLine($"Download progress: {output}");
+                    Logger.Log($"Download progress: {output}");
                     Dispatcher.Invoke(() =>
                     {
                         var percent = ExtractProgressPercent(output);
@@ -365,18 +428,18 @@ public partial class MainWindow : Window
                     return;
                 }
                 
-                Console.WriteLine($"Model {selectedModel} download completed");
+                Logger.Log($"Model {selectedModel} download completed");
                 UpdateStatus("Download completed");
             }
 
             // Step 3: Check service status and start if needed
-            Console.WriteLine("Checking foundry service status...");
+            Logger.Log("Checking foundry service status...");
             UpdateStatus("Checking service status...");
             var (isRunning, serviceUrl) = await _foundryService.GetServiceStatusAsync();
             
             if (!isRunning)
             {
-                Console.WriteLine("Service not running, starting...");
+                Logger.Log("Service not running, starting...");
                 UpdateStatus("Starting foundry service...");
                 ShowProgress("Starting service...", null);
                 serviceUrl = await _foundryService.StartServiceAsync();
@@ -395,16 +458,16 @@ public partial class MainWindow : Window
             {
                 _chat.SetBaseUrl(serviceUrl);
                 Dispatcher.Invoke(() => TxtServiceUrl.Text = serviceUrl);
-                Console.WriteLine($"Service URL set to: {serviceUrl}");
+                Logger.Log($"Service URL set to: {serviceUrl}");
             }
 
             // Step 5: Load the model
-            Console.WriteLine($"Loading model {selectedModel}...");
+            Logger.Log($"Loading model {selectedModel}...");
             UpdateStatus($"Loading {selectedModel}...");
             ShowProgress($"Loading {selectedModel}...", null);
             
             await _foundryService.LoadModelAsync(selectedModel);
-            Console.WriteLine("Model load command sent");
+            Logger.Log("Model load command sent");
             
             // Step 6: Wait a brief moment for model to load, then try health check once
             UpdateStatus("Verifying model is ready...");
@@ -415,7 +478,7 @@ public partial class MainWindow : Window
                 bool isHealthy = await _chat.HealthOkAsync();
                 if (isHealthy)
                 {
-                    Console.WriteLine("Health check PASSED!");
+                    Logger.Log("Health check PASSED!");
                     UpdateStatus("Running");
                     ShowProgress("Model ready", 100);
                     _currentModel = selectedModel;
@@ -426,7 +489,7 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    Console.WriteLine("Health check failed - service not responding");
+                    Logger.Log("Health check failed - service not responding");
                     UpdateStatus("Service not responding");
                     ShowProgress("Health check failed", null);
                     _ = Task.Delay(3000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
@@ -434,7 +497,7 @@ public partial class MainWindow : Window
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Health check error: {ex.Message}");
+                Logger.Log($"Health check error: {ex.Message}");
                 UpdateStatus("Health check failed");
                 ShowProgress($"Health check error: {ex.Message}", null);
                 _ = Task.Delay(3000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
@@ -442,7 +505,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error in BtnStart_Click: {ex.Message}");
+            Logger.Log($"Error in BtnStart_Click: {ex.Message}");
             UpdateStatus("Error occurred");
             ShowProgress($"Error: {ex.Message}", null);
             _ = Task.Delay(5000).ContinueWith(_ => Dispatcher.Invoke(() => HideProgress()));
@@ -513,18 +576,30 @@ public partial class MainWindow : Window
         var prompt = TxtPrompt.Text.Trim();
         if (string.IsNullOrEmpty(prompt)) return;
 
+        EnterBusyState("Preparing model...");
+
+        // Ensure model is ready (download + load if needed)
+        var prepOk = await EnsureModelLoadedAsync(model);
+        if (!prepOk)
+        {
+            AppendChat("Error", $"Failed to prepare model '{model}'.");
+            ExitBusyState();
+            return;
+        }
+
         EnterBusyState("Sending...");
         AppendChat("You", prompt);
         TxtPrompt.Clear();
 
         _messages.Add(new ChatMessage { Role = "user", Content = prompt });
+    _activeThread?.Messages.Add(new ChatMessage { Role = "user", Content = prompt });
         try
         {
             string reply;
             if (_config.OpenAICompatible)
             {
                 // Use the model alias directly - ChatClient handles the URL resolution
-                Console.WriteLine($"Sending chat request with model alias: '{model}'");
+                Logger.Log($"Sending chat request with model alias: '{model}'");
                 var temp = (float)SldTemp.Value;
                 _chatCts = new System.Threading.CancellationTokenSource();
                 reply = await _chat.SendChatAsync(model, _messages, temp, _chatCts.Token);
@@ -534,6 +609,12 @@ public partial class MainWindow : Window
                 reply = "(openai_compatible is false; customize ChatClient for your API.)";
             }
             _messages.Add(new ChatMessage { Role = "assistant", Content = reply });
+            _activeThread?.Messages.Add(new ChatMessage { Role = "assistant", Content = reply });
+            if (_activeThread != null)
+            {
+                _activeThread.UpdatedUtc = DateTime.UtcNow;
+                RefreshThreadListPreserveSelection();
+            }
             AppendChat("Assistant", reply);
         }
         catch (Exception ex)
@@ -545,6 +626,88 @@ public partial class MainWindow : Window
             ExitBusyState();
             _chatCts?.Dispose();
             _chatCts = null;
+        }
+    }
+
+    private async Task<bool> EnsureModelLoadedAsync(string modelAlias)
+    {
+        try
+        {
+            // Quick check: is model already loaded?
+            var loaded = await _foundryService.GetCurrentlyLoadedModelsAsync();
+            if (loaded.Contains(modelAlias))
+            {
+                _currentModel = modelAlias;
+                _isModelLoaded = true;
+                UpdateCurrentModelDisplay();
+                return true;
+            }
+
+            UpdateStatus($"Checking cache for {modelAlias}...");
+            ShowProgress($"Checking cache for {modelAlias}...", null);
+            bool isCached = await _foundryService.IsModelCachedAsync(modelAlias);
+            if (!isCached)
+            {
+                UpdateStatus($"Downloading {modelAlias}...");
+                ShowProgress($"Downloading {modelAlias}...", null);
+                var progress = new Progress<string>(line =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        var pct = ExtractProgressPercent(line);
+                        if (pct.HasValue) UpdateProgressPercent(pct.Value); else LblProgressStatus.Text = line;
+                    });
+                });
+                var downloaded = await _foundryService.DownloadModelAsync(modelAlias, progress);
+                if (!downloaded)
+                {
+                    UpdateStatus("Download failed");
+                    ShowProgress("Download failed", null);
+                    await Task.Delay(2000);
+                    HideProgress();
+                    return false;
+                }
+            }
+
+            UpdateStatus($"Loading {modelAlias}...");
+            ShowProgress($"Loading {modelAlias}...", null);
+            var loadedOk = await _foundryService.LoadModelAsync(modelAlias);
+            if (!loadedOk)
+            {
+                UpdateStatus("Load failed");
+                ShowProgress("Load failed", null);
+                await Task.Delay(2000);
+                HideProgress();
+                return false;
+            }
+
+            // Validate health once
+            await Task.Delay(2000);
+            try
+            {
+                bool healthy = await _chat.HealthOkAsync();
+                if (!healthy)
+                {
+                    UpdateStatus("Model not responding");
+                    ShowProgress("Model not responding", null);
+                    await Task.Delay(2000);
+                    HideProgress();
+                    return false;
+                }
+            }
+            catch { /* ignore health exceptions; treat as failure */ }
+
+            _currentModel = modelAlias;
+            _isModelLoaded = true;
+            UpdateCurrentModelDisplay();
+            ShowProgress("Model ready", 100);
+            _ = Task.Delay(1500).ContinueWith(_ => Dispatcher.Invoke(HideProgress));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppendChat("Error", $"Model prep error: {ex.Message}");
+            return false;
         }
     }
 
@@ -596,6 +759,18 @@ public partial class MainWindow : Window
             // Auto-scroll to bottom
             ChatScrollViewer.ScrollToBottom();
         });
+
+        // Update thread metadata
+        if (_activeThread != null)
+        {
+            _activeThread.UpdatedUtc = DateTime.UtcNow;
+            if (who == "You" && _activeThread.Messages.Count == 0)
+            {
+                // Derive title from first user prompt (truncate)
+                _activeThread.Title = text.Length > 40 ? text.Substring(0, 40) + "…" : text;
+                RefreshThreadListPreserveSelection();
+            }
+        }
     }
 
     private void BtnOpenConfig_Click(object sender, RoutedEventArgs e)
@@ -922,5 +1097,100 @@ public partial class MainWindow : Window
             BtnSend.Content = "Send";
             UpdateUIState();
         });
+    }
+
+    // ===== Thread Pane Logic =====
+    private void InitializeThreads()
+    {
+        // Create an initial thread
+        var initial = new ChatThread
+        {
+            Title = "New Chat",
+            Messages = new List<ChatMessage>{ new ChatMessage { Role="system", Content="You are a helpful assistant." } }
+        };
+        _threads.Add(initial);
+        _activeThread = initial;
+        LstThreads.ItemsSource = null;
+        LstThreads.ItemsSource = _threads.OrderByDescending(t=>t.UpdatedUtc).ToList();
+        LstThreads.SelectedIndex = 0;
+    }
+
+    private void RefreshThreadListPreserveSelection()
+    {
+        var selected = _activeThread?.Id;
+        var ordered = _threads.OrderByDescending(t=>t.UpdatedUtc).ToList();
+        _isRefreshingThreads = true;
+        try
+        {
+            LstThreads.ItemsSource = null;
+            LstThreads.ItemsSource = ordered;
+            if (selected != null)
+            {
+                var idx = ordered.FindIndex(t=>t.Id==selected);
+                if (idx >= 0) LstThreads.SelectedIndex = idx;
+            }
+        }
+        finally
+        {
+            _isRefreshingThreads = false;
+        }
+    }
+
+    private void BtnNewThread_Click(object sender, RoutedEventArgs e)
+    {
+        var thread = new ChatThread
+        {
+            Title = "New Chat",
+            Messages = new List<ChatMessage>{ new ChatMessage { Role="system", Content="You are a helpful assistant." } }
+        };
+        _threads.Add(thread);
+        _activeThread = thread;
+        RefreshThreadListPreserveSelection();
+        LoadThreadIntoUI(thread);
+    }
+
+    private void LstThreads_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+    if (_isRefreshingThreads) return; // suppress duplicate reload
+    if (LstThreads.SelectedItem is ChatThread ct)
+        {
+            _activeThread = ct;
+            LoadThreadIntoUI(ct);
+        }
+    }
+
+    private void LoadThreadIntoUI(ChatThread thread)
+    {
+        ChatMessages.Children.Clear();
+        foreach (var msg in thread.Messages.Where(m=> m.Role != "system"))
+        {
+            var who = msg.Role == "assistant" ? "Assistant" : msg.Role == "user" ? "You" : msg.Role;
+            AppendChat(who, msg.Content);
+        }
+        // reset message list pointer
+        _messages.Clear();
+        _messages.AddRange(thread.Messages);
+    }
+
+    private void BtnToggleThreadPane_Click(object sender, RoutedEventArgs e)
+    {
+        const double expandedWidth = 260;
+        const double collapsedWidth = 56; // matches CollapsedThreadPane width
+        bool currentlyExpanded = ExpandedThreadPane.Visibility == Visibility.Visible;
+
+        if (currentlyExpanded)
+        {
+            // Collapse
+            ExpandedThreadPane.Visibility = Visibility.Collapsed;
+            CollapsedThreadPane.Visibility = Visibility.Visible;
+            ThreadPaneColumn.Width = new GridLength(collapsedWidth);
+        }
+        else
+        {
+            // Expand
+            ExpandedThreadPane.Visibility = Visibility.Visible;
+            CollapsedThreadPane.Visibility = Visibility.Collapsed;
+            ThreadPaneColumn.Width = new GridLength(expandedWidth);
+        }
     }
 }
