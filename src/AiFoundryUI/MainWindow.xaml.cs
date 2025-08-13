@@ -173,8 +173,14 @@ public partial class MainWindow : Window
     {
         if (_activeThread == null)
         {
-            MessageBox.Show("Create or select a thread first.");
-            return;
+            // Quality of life: create a new thread automatically if none is active
+            var id = await _threadsRepo.CreateThreadAsync("New Chat");
+            await _threadsRepo.AddMessageAsync(id, "system", "You are a helpful assistant.");
+            var thread = new ChatThreadEntity { Id = id, Title = "New Chat", CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow };
+            _threads.Add(thread);
+            _activeThread = thread;
+            RefreshThreadListPreserveSelection();
+            await LoadThreadIntoUIAsync(thread);
         }
         try
         {
@@ -208,6 +214,8 @@ public partial class MainWindow : Window
             _threadHasInstructions = !string.IsNullOrWhiteSpace(_activeThread.ThreadInstructions);
             ThreadInstructionsPanel.Visibility = Visibility.Collapsed;
             UpdateThreadInstructionUIState();
+            // Reflect changes (e.g., badge) in the thread list
+            RefreshThreadListPreserveSelection();
         }
         catch (Exception ex)
         {
@@ -225,11 +233,8 @@ public partial class MainWindow : Window
     {
         _threadHasInstructions = !string.IsNullOrWhiteSpace(_activeThread?.ThreadInstructions);
         ChkUseDefaultInstructions.Visibility = _threadHasInstructions ? Visibility.Visible : Visibility.Collapsed;
-        if (!_threadHasInstructions)
-        {
-            // Hidden when no thread prompt; combine is irrelevant
-            ChkUseDefaultInstructions.IsChecked = false;
-        }
+    // Default OFF whenever the visible thread has its own prompt, and also when hidden
+    ChkUseDefaultInstructions.IsChecked = false;
     }
 
     private string? BuildSystemInstructions()
@@ -1407,6 +1412,9 @@ public partial class MainWindow : Window
     LstThreads.ItemsSource = null;
     LstThreads.ItemsSource = _threads.OrderByDescending(t=>t.UpdatedUtc).ToList();
     // Do not call LoadThreadIntoUIAsync here; keep Welcome panel until user selects/creates a thread
+    // Ensure instruction UI reflects no active thread
+    ChkUseDefaultInstructions.Visibility = Visibility.Collapsed;
+    ChkUseDefaultInstructions.IsChecked = false;
     }
 
     private void RefreshThreadListPreserveSelection()
@@ -1516,6 +1524,9 @@ public partial class MainWindow : Window
 
     private async Task LoadThreadIntoUIAsync(ChatThreadEntity thread)
     {
+    // Switch to the thread view context
+    WelcomePanel.Visibility = Visibility.Collapsed;
+    ThreadInstructionsPanel.Visibility = Visibility.Collapsed;
         ChatMessages.Children.Clear();
         var messages = await _threadsRepo.GetMessagesAsync(thread.Id);
         foreach (var msg in messages)
@@ -1526,6 +1537,8 @@ public partial class MainWindow : Window
         }
         _messages.Clear();
         _messages.AddRange(messages.Select(m => new ChatMessage { Role = m.Role, Content = m.Content }));
+    // Update per-thread instruction toggle based on this thread
+    UpdateThreadInstructionUIState();
     }
 
     private void BtnToggleThreadPane_Click(object sender, RoutedEventArgs e)
