@@ -732,6 +732,7 @@ public partial class MainWindow : Window
         }
         try
         {
+            // test new rule set
             string reply;
             if (_config.OpenAICompatible)
             {
