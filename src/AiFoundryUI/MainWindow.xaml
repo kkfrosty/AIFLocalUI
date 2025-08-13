@@ -245,6 +245,16 @@
                     <!-- Editor with Markdown Edit/Preview -->
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                         <StackPanel Margin="12,0,12,12">
+                            <!-- Prompt generator -->
+                            <Border Background="#F3F4F6" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,12">
+                                <StackPanel>
+                                    <TextBlock Text="Describe what you want this prompt to do" Margin="0,0,0,6"/>
+                                    <TextBox x:Name="TxtThreadPromptIdea" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="48" VerticalScrollBarVisibility="Auto"/>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                                        <Button x:Name="BtnGenerateThreadPrompt" Content="Generate with AI" Padding="12,4" Click="BtnGenerateThreadPrompt_Click"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
                             <TabControl x:Name="ThreadInstructionsTabs" SelectionChanged="ThreadInstructionsTabs_SelectionChanged">
                                 <TabItem Header="Edit">
                                     <TextBox x:Name="TxtThreadInstructions" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="200"

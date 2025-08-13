@@ -15,9 +15,9 @@ public class Config
     public string WorkingDir { get; set; } = "";
     public Dictionary<string, string> Environment { get; set; } = new();
 
-    public string ApiBase { get; set; } = "http://localhost:8000/v1";
+    public string ApiBase { get; set; } = "http://localhost:59186/v1";
     public string ApiKey { get; set; } = "";
-    public string HealthUrl { get; set; } = "http://localhost:8000/health";
+    public string HealthUrl { get; set; } = "http://localhost:59186/health";
     public bool OpenAICompatible { get; set; } = true;
 
     public string ModelListCommand { get; set; } = "";
