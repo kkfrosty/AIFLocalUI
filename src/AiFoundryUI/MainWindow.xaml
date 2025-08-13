@@ -101,10 +101,19 @@
                                     <Grid Grid.Column="1" Margin="6,0,0,0" Width="24" Height="24">
                                         <Button x:Name="BtnThreadInstructions"
                                                 Content="🧭"
-                                                ToolTip="Edit thread instructions"
                                                 Width="24" Height="24"
                                                 Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
-                                                Click="BtnThreadInstructions_Click"/>
+                                                Click="BtnThreadInstructions_Click">
+                                            <Button.ToolTip>
+                                                <ToolTip>
+                                                    <TextBlock Text="{Binding ThreadInstructions, TargetNullValue=No thread instructions}" 
+                                                               TextWrapping="Wrap" 
+                                                               TextTrimming="CharacterEllipsis"
+                                                               MaxWidth="360" 
+                                                               MaxHeight="200"/>
+                                                </ToolTip>
+                                            </Button.ToolTip>
+                                        </Button>
                                         <Ellipse Width="6" Height="6" Fill="#10B981" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,0,0,0" Visibility="Visible">
                                             <Ellipse.Style>
                                                 <Style TargetType="Ellipse">
