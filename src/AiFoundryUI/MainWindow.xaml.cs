@@ -14,6 +14,7 @@ namespace AiFoundryUI;
 /// </summary>
 public partial class MainWindow : Window
 {
+    private const string DefaultModelAlias = "phi-4-mini"; // preferred default when nothing is loaded
     private readonly Config _config;
     private readonly ChatClient _chat;
     private readonly SystemMonitor _monitor;
@@ -29,6 +30,7 @@ public partial class MainWindow : Window
     private bool _isServiceRunning = false;
     private System.Threading.CancellationTokenSource? _chatCts;
     private System.Threading.CancellationTokenSource? _opCts; // for non-chat operations
+    private bool _suppressAutoLoad = false; // avoid auto-loading on programmatic selection
 
     // Persistence-backed threads
     private readonly List<ChatThreadEntity> _threads = new();
@@ -106,12 +108,35 @@ public partial class MainWindow : Window
         }
     }
 
-    private void CmbModels_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    private async void CmbModels_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         // Auto-hide welcome panel when model is selected
         if (CmbModels.SelectedItem != null)
         {
             WelcomePanel.Visibility = Visibility.Collapsed;
+        }
+
+        // Auto-load the model when user changes selection (not during programmatic selection)
+        if (_suppressAutoLoad) return;
+        var selected = CmbModels.SelectedItem as string;
+        if (string.IsNullOrWhiteSpace(selected)) return;
+
+        // If it's already the current loaded model, skip
+        if (_isModelLoaded && string.Equals(_currentModel, selected, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        EnterBusyState($"Preparing {selected}...");
+        try
+        {
+            var ok = await EnsureModelLoadedAsync(selected);
+            if (!ok)
+            {
+                AppendChat("Error", $"Failed to load model '{selected}'.");
+            }
+        }
+        finally
+        {
+            ExitBusyState();
         }
     }
 
@@ -266,10 +291,12 @@ public partial class MainWindow : Window
                     if (!merged.Contains(lm)) merged.Add(lm);
                 models = merged.OrderBy(m=>m).ToList();
             }
-            if (models?.Count > 0)
+        if (models?.Count > 0)
             {
+                bool noLoadedAtStartup = loadedModels.Count == 0; // track for default auto-load
                 Dispatcher.Invoke(() =>
                 {
+            _suppressAutoLoad = true; // prevent auto-load during initial binding/selection
                     CmbModels.ItemsSource = models;
                     if (loadedModels.Count > 0)
                     {
@@ -372,11 +399,32 @@ public partial class MainWindow : Window
                     }
                     else if (CmbModels.SelectedIndex < 0)
                     {
-                        CmbModels.SelectedIndex = 0;
+                        // Prefer the default model alias when nothing is loaded
+                        var idxDefault = models.FindIndex(m => string.Equals(m, DefaultModelAlias, StringComparison.OrdinalIgnoreCase));
+                        CmbModels.SelectedIndex = idxDefault >= 0 ? idxDefault : 0;
                     }
+                    _suppressAutoLoad = false;
                 });
                 Log($"[info] Loaded {models.Count} models: {string.Join(", ", models)}");
-                UpdateStatus("Ready - Select a model and click Start");
+                UpdateStatus("Ready - pick a model to load");
+
+                // If no models are loaded in the service, auto-load the default if available
+                if (noLoadedAtStartup)
+                {
+                    var hasDefault = models.Any(m => string.Equals(m, DefaultModelAlias, StringComparison.OrdinalIgnoreCase));
+                    if (hasDefault)
+                    {
+                        UpdateStatus($"Loading default model: {DefaultModelAlias}...");
+                        ShowProgress($"Loading {DefaultModelAlias}...", null);
+                        var ok = await EnsureModelLoadedAsync(DefaultModelAlias);
+                        if (!ok)
+                        {
+                            ShowProgress($"Failed to load {DefaultModelAlias}", null);
+                            await Task.Delay(1500);
+                            HideProgress();
+                        }
+                    }
+                }
             }
             else
             {
@@ -635,7 +683,28 @@ public partial class MainWindow : Window
         var model = CmbModels.SelectedItem as string ?? string.Empty;
         if (string.IsNullOrWhiteSpace(model))
         {
-            MessageBox.Show("Select a model.", "Missing model");
+            // Try to fall back to default model
+            var items = (CmbModels.ItemsSource as System.Collections.IEnumerable)?.Cast<string>().ToList() ?? new List<string>();
+            if (items.Count > 0)
+            {
+                var idxDefault = items.FindIndex(m => string.Equals(m, DefaultModelAlias, StringComparison.OrdinalIgnoreCase));
+                _suppressAutoLoad = true; // avoid double EnsureModelLoadedAsync via SelectionChanged
+                if (idxDefault >= 0)
+                {
+                    CmbModels.SelectedIndex = idxDefault;
+                    model = items[idxDefault];
+                }
+                else
+                {
+                    CmbModels.SelectedIndex = 0;
+                    model = items[0];
+                }
+                _suppressAutoLoad = false;
+            }
+        }
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            MessageBox.Show("No models available.", "Missing model");
             return;
         }
         var prompt = TxtPrompt.Text.Trim();
@@ -701,6 +770,30 @@ public partial class MainWindow : Window
     {
         try
         {
+            // Ensure service is running and chat client is pointed at it
+            var (isRunning, serviceUrl) = await _foundryService.GetServiceStatusAsync();
+            if (!isRunning)
+            {
+                UpdateStatus("Starting service...");
+                ShowProgress("Starting service...", null);
+                serviceUrl = await _foundryService.StartServiceAsync();
+                if (string.IsNullOrWhiteSpace(serviceUrl))
+                {
+                    UpdateStatus("Failed to start service");
+                    ShowProgress("Service start failed", null);
+                    await Task.Delay(2000);
+                    HideProgress();
+                    return false;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(serviceUrl))
+            {
+                _chat.SetBaseUrl(serviceUrl);
+                Dispatcher.Invoke(() => TxtServiceUrl.Text = serviceUrl);
+                UpdateServiceStatusDisplay(true);
+            }
+
             // Quick check: is model already loaded?
             var loaded = await _foundryService.GetCurrentlyLoadedModelsAsync();
             if (loaded.Contains(modelAlias))
