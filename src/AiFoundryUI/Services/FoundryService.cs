@@ -159,7 +159,7 @@ public class FoundryService
     /// <summary>
     /// Get list of all available model aliases (both cached and downloadable)
     /// </summary>
-    public async Task<List<string>> GetAvailableModelsAsync(System.Threading.CancellationToken? token = null)
+    private async Task<List<string>> GetAvailableModelsAsync_Legacy(System.Threading.CancellationToken? token = null)
     {
         var (exitCode, output, error) = await RunFoundryCommandAsync("model list", token);
         
@@ -196,7 +196,91 @@ public class FoundryService
         }
         
         var result = aliases.OrderBy(a => a).ToList();
-        DebugLog($"Found {result.Count} available model aliases");
+    DebugLog($"[LEGACY] Found {result.Count} available model aliases");
+        return result;
+    }
+
+    /// <summary>
+    /// Get list of all available model aliases (both cached and downloadable)
+    /// </summary>
+    public async Task<List<string>> GetAvailableModelsAsync(System.Threading.CancellationToken? token = null)
+    {
+        var (exitCode, output, error) = await RunFoundryCommandAsync("model list", token);
+        
+        if (exitCode != 0)
+        {
+            DebugLog($"Failed to get model list. Exit code: {exitCode}");
+            return new List<string>();
+        }
+
+        // Strip ANSI, find the header to locate the 'Alias' column, and slice that region for each row
+        var ansi = new Regex("\u001B\\[[;?0-9]*[ -/]*[@-~]");
+        var wsCollapse = new Regex("\\s+");
+        var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(l => ansi.Replace(l, string.Empty)).ToList();
+
+        int headerIndex = -1;
+        int aliasStart = -1;
+        int aliasEnd = -1; // exclusive; if -1 use end of line
+
+        // Identify header line and alias column bounds
+        for (int i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            if (line.IndexOf("Alias", StringComparison.OrdinalIgnoreCase) >= 0 &&
+               (line.IndexOf("Device", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                line.IndexOf("Task", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                line.IndexOf("Model", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                line.IndexOf("Provider", StringComparison.OrdinalIgnoreCase) >= 0))
+            {
+                headerIndex = i;
+                aliasStart = Math.Max(0, line.IndexOf("Alias", StringComparison.OrdinalIgnoreCase));
+                // find the next column name after Alias to determine the end of the alias column
+                var candidates = new[] { "Device", "Task", "Model", "Provider", "Size", "Quant" };
+                var nextStarts = candidates
+                    .Select(c => line.IndexOf(c, StringComparison.OrdinalIgnoreCase))
+                    .Where(idx => idx > aliasStart)
+                    .DefaultIfEmpty(-1)
+                    .ToList();
+                aliasEnd = nextStarts.Where(idx => idx >= 0).DefaultIfEmpty(-1).Min();
+                break;
+            }
+        }
+
+        if (headerIndex >= 0 && aliasStart >= 0)
+        {
+            for (int i = headerIndex + 1; i < lines.Count; i++)
+            {
+                var raw = lines[i];
+                var line = raw.TrimEnd();
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                if (line.StartsWith("---") || line.StartsWith("==") || line.StartsWith("__")) continue; // dividers
+                if (line.StartsWith("To ", StringComparison.OrdinalIgnoreCase) || line.StartsWith("Use ", StringComparison.OrdinalIgnoreCase)) break; // hints/end
+
+                string slice;
+                if (aliasStart < line.Length)
+                {
+                    if (aliasEnd > aliasStart && aliasEnd <= line.Length)
+                        slice = line.Substring(aliasStart, aliasEnd - aliasStart);
+                    else
+                        slice = line.Substring(aliasStart);
+                }
+                else continue;
+
+                var alias = wsCollapse.Replace(slice, " ").Trim();
+                if (string.IsNullOrWhiteSpace(alias)) continue;
+                // Take only the first token within the alias column
+                alias = alias.Split(' ').FirstOrDefault()?.Trim() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(alias)) continue;
+                if (alias.Equals("Alias", StringComparison.OrdinalIgnoreCase)) continue;
+                if (alias.Equals("CPU", StringComparison.OrdinalIgnoreCase) || alias.Equals("GPU", StringComparison.OrdinalIgnoreCase)) continue;
+                aliases.Add(alias);
+            }
+        }
+
+        var result = aliases.OrderBy(a => a).ToList();
+        DebugLog($"Found {result.Count} available model aliases: {string.Join(", ", result)}");
         return result;
     }
 
@@ -239,7 +323,7 @@ public class FoundryService
     public async Task<bool> IsModelCachedAsync(string modelAlias)
     {
         var cachedModels = await GetCachedModelsAsync();
-        bool isCached = cachedModels.Any(cached => cached.Equals(modelAlias, StringComparison.OrdinalIgnoreCase) || 
+        bool isCached = cachedModels.Any(cached => cached.Equals(modelAlias, StringComparison.OrdinalIgnoreCase) ||
                                                    cached.Contains(modelAlias, StringComparison.OrdinalIgnoreCase));
         DebugLog($"Checking if '{modelAlias}' is cached. Cached models: [{string.Join(", ", cachedModels)}]. Result: {isCached}");
         return isCached;
@@ -387,6 +471,10 @@ public class FoundryService
             return new List<string>();
         }
 
+    // Log a trimmed snapshot of raw output for diagnostics (limit size)
+    var rawPreview = output.Length > 2000 ? output.Substring(0, 2000) + "...<truncated>" : output;
+    DebugLog($"Raw service list output preview:\n{rawPreview}");
+
         var loadedModels = new List<string>();
         var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
         
@@ -398,31 +486,45 @@ public class FoundryService
         }
 
         bool inModelsSection = false;
+    var ansi = new Regex(@"\u001B\[[;?0-9]*[ -/]*[@-~]"); // strip ANSI color codes
+        var wsCollapse = new Regex("\\s+");
+        var aliasToken = new Regex("^[A-Za-z0-9._-]+$");
         foreach (var line in lines)
         {
-            // Look for the section that lists running models
-            if (line.Contains("Models running in service:"))
+            // Remove ANSI and trim
+            var trimmed = ansi.Replace(line, string.Empty).Trim();
+            if (trimmed.Length == 0) continue;
+
+            // Start of models section
+            if (trimmed.StartsWith("Models running in service:"))
             {
                 inModelsSection = true;
                 continue;
             }
             if (!inModelsSection) continue;
-            
-            // Look for lines like: "🟢  gpt-oss-20b                    gpt-oss-20b-cuda-gpu"
-            // Extract the alias (second column) and model ID (third column)
-            if (line.Contains("🟢"))
+
+            // Stop conditions (another header / hint text)
+            if (trimmed.StartsWith("To load", StringComparison.OrdinalIgnoreCase) || trimmed.StartsWith("Use \"foundry"))
+                break;
+
+            // Normalize whitespace for parsing
+            var collapsed = wsCollapse.Replace(trimmed, " ");
+            var parts = collapsed.Split(' ');
+
+            // Expect at least indicator + alias + modelId
+            if (parts.Length >= 3)
             {
-                // Normalize whitespace
-                var collapsed = Regex.Replace(line, "\\s+", " ").Trim();
-                var parts = collapsed.Split(' ');
-                if (parts.Length >= 3)
+                // If first part is an indicator (emoji or status marker), treat second as alias
+                // Pick alias as the first token that looks like an alias string
+                string aliasCandidate = aliasToken.IsMatch(parts[0]) ? parts[0] : (parts.Length > 1 && aliasToken.IsMatch(parts[1]) ? parts[1] : string.Empty);
+
+                // Basic filtering: discard clearly non-alias tokens
+                if (!string.IsNullOrWhiteSpace(aliasCandidate) && !aliasCandidate.Contains("http://") && !aliasCandidate.Contains("https://"))
                 {
-                    var alias = parts[1].Trim();
-                    var modelId = parts[2].Trim();
-                    if (!string.IsNullOrWhiteSpace(alias))
+                    if (!loadedModels.Contains(aliasCandidate, StringComparer.OrdinalIgnoreCase))
                     {
-                        loadedModels.Add(alias);
-                        DebugLog($"Found loaded model: '{alias}' (ID: {modelId})");
+                        loadedModels.Add(aliasCandidate.Trim());
+                        DebugLog($"Detected loaded model alias: '{aliasCandidate}' (raw line: '{trimmed}')");
                     }
                 }
             }

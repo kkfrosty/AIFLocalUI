@@ -259,7 +259,11 @@ public partial class MainWindow : Window
             UpdateStatus("Loading available models...");
             var models = await _foundryService.GetAvailableModelsAsync();
             var loadedModels = await _foundryService.GetCurrentlyLoadedModelsAsync();
-            System.Diagnostics.Debug.WriteLine($"[startup] Available models: {string.Join(", ", models)} | Loaded: {string.Join(", ", loadedModels)}");
+            Logger.Log($"[startup] Available models: {string.Join(", ", models)} | Loaded(raw): {string.Join(", ", loadedModels)}");
+            // Sanitize: strip any header/device tokens that should never appear
+            var badTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "alias", "cpu", "gpu" };
+            models = models.Where(m => !string.IsNullOrWhiteSpace(m) && !badTokens.Contains(m.Trim())).ToList();
+            loadedModels = loadedModels.Where(m => !string.IsNullOrWhiteSpace(m) && !badTokens.Contains(m.Trim())).ToList();
             // Ensure any loaded alias not present gets included so user sees it
             if (loadedModels.Count > 0)
             {
@@ -275,37 +279,101 @@ public partial class MainWindow : Window
                     CmbModels.ItemsSource = models;
                     if (loadedModels.Count > 0)
                     {
-                        var normLoaded = loadedModels
-                            .Select(l => l.Trim())
-                            .Distinct(StringComparer.OrdinalIgnoreCase)
-                            .ToList();
-                        // Prefer exact (case-insensitive) alias match
-                        var match = models.FirstOrDefault(m => normLoaded.Any(l => string.Equals(l, m, StringComparison.OrdinalIgnoreCase)));
-                        // Fallback: if only one loaded model, just use it even if not in models list
+                        var normLoaded = loadedModels.Select(l => l.Trim())
+                                                     .Where(l => !string.IsNullOrWhiteSpace(l))
+                                                     .Distinct(StringComparer.OrdinalIgnoreCase)
+                                                     .ToList();
+
+                        string? match = null;
+
+                        // 1. Exact case-insensitive match
+                        match = models.FirstOrDefault(m => normLoaded.Any(l => string.Equals(l, m, StringComparison.OrdinalIgnoreCase)));
+                        if (match != null) Logger.Log($"[startup-select] Exact match: {match}");
+
+                        // 2. If only one loaded alias and not in list, add it and select
                         if (match == null && normLoaded.Count == 1)
                         {
-                            match = normLoaded[0];
-                            if (!models.Any(m => string.Equals(m, match, StringComparison.OrdinalIgnoreCase)))
+                            var single = normLoaded[0];
+                            if (!models.Any(m => string.Equals(m, single, StringComparison.OrdinalIgnoreCase)))
                             {
-                                models = models.Concat(new[]{ match }).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(m=>m).ToList();
-                                CmbModels.ItemsSource = models; // refresh datasource with added alias
+                                Logger.Log($"[startup-select] Single loaded alias '{single}' not in available list; injecting.");
+                                models = models.Concat(new[]{ single }).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(m=>m).ToList();
+                                CmbModels.ItemsSource = models; // refresh
+                            }
+                            match = single;
+                        }
+
+                        // 3. Fuzzy: contains either direction (length safeguard to avoid very short substrings)
+                        if (match == null)
+                        {
+                            match = models.FirstOrDefault(m => normLoaded.Any(l =>
+                                (l.Length > 5 && (l.Contains(m, StringComparison.OrdinalIgnoreCase) || m.Contains(l, StringComparison.OrdinalIgnoreCase)))));
+                            if (match != null) Logger.Log($"[startup-select] Fuzzy contains match: {match}");
+                        }
+
+                        // 4. Prefix/suffix matches
+                        if (match == null)
+                        {
+                            match = models.FirstOrDefault(m => normLoaded.Any(l => m.StartsWith(l, StringComparison.OrdinalIgnoreCase) || m.EndsWith(l, StringComparison.OrdinalIgnoreCase) || l.StartsWith(m, StringComparison.OrdinalIgnoreCase) || l.EndsWith(m, StringComparison.OrdinalIgnoreCase)));
+                            if (match != null) Logger.Log($"[startup-select] Prefix/suffix match: {match}");
+                        }
+
+                        // 5. Levenshtein distance (pick best within threshold)
+                        if (match == null)
+                        {
+                            int BestDistance(string a, string b)
+                            {
+                                var la = a.Length; var lb = b.Length;
+                                var d = new int[la + 1, lb + 1];
+                                for (int i = 0; i <= la; i++) d[i,0] = i;
+                                for (int j = 0; j <= lb; j++) d[0,j] = j;
+                                for (int i = 1; i <= la; i++)
+                                    for (int j = 1; j <= lb; j++)
+                                    {
+                                        int cost = char.ToLowerInvariant(a[i-1]) == char.ToLowerInvariant(b[j-1]) ? 0 : 1;
+                                        d[i,j] = Math.Min(Math.Min(d[i-1,j] + 1, d[i,j-1] + 1), d[i-1,j-1] + cost);
+                                    }
+                                return d[la, lb];
+                            }
+                            var candidates = new List<(string m,int dist)>();
+                            foreach (var lm in normLoaded)
+                                foreach (var av in models)
+                                    candidates.Add((av, BestDistance(lm, av)));
+                            var best = candidates.OrderBy(c=>c.dist).FirstOrDefault();
+                            if (best.m != null && best.dist <= 3) // threshold
+                            {
+                                match = best.m;
+                                Logger.Log($"[startup-select] Levenshtein match: {match} (distance {best.dist})");
                             }
                         }
-                        // Secondary fallback: partial contains (handles truncated/variant names)
-                        match ??= models.FirstOrDefault(m => normLoaded.Any(l => l.Contains(m, StringComparison.OrdinalIgnoreCase) || m.Contains(l, StringComparison.OrdinalIgnoreCase)));
 
                         if (match != null)
                         {
-                            CmbModels.SelectedItem = match;
-                            _currentModel = match;
+                            // Prefer selecting by index to avoid any object-identity quirks
+                            var idx = models.FindIndex(m => string.Equals(m, match, StringComparison.OrdinalIgnoreCase));
+                            if (idx >= 0)
+                            {
+                                CmbModels.SelectedIndex = idx;
+                                _currentModel = models[idx];
+                                Logger.Log($"[startup-select] Selected index {idx} for alias '{_currentModel}'");
+                            }
+                            else
+                            {
+                                // Fallback to SelectedItem
+                                CmbModels.SelectedItem = match;
+                                _currentModel = match;
+                                Logger.Log($"[startup-select] Fallback SelectedItem for alias '{_currentModel}'");
+                            }
                             _isModelLoaded = true;
                             UpdateCurrentModelDisplay();
                             UpdateStatus($"Model loaded: {match}");
-                            TxtCurrentModel.Text = $"Model: {match}"; // ensure label reflects
+                            TxtCurrentModel.Text = $"Model: {match}";
                         }
-                        else if (CmbModels.SelectedIndex < 0)
+                        else
                         {
-                            CmbModels.SelectedIndex = 0;
+                            Logger.Log($"[startup-select] No match found. Loaded aliases: {string.Join(", ", normLoaded)}; model list: {string.Join(", ", models)}");
+                            if (CmbModels.SelectedIndex < 0 && CmbModels.Items.Count > 0)
+                                CmbModels.SelectedIndex = 0; // fallback
                         }
                     }
                     else if (CmbModels.SelectedIndex < 0)
@@ -514,14 +582,17 @@ public partial class MainWindow : Window
 
     private async void BtnStop_Click(object sender, RoutedEventArgs e)
     {
-        if (!string.IsNullOrWhiteSpace(_currentModel))
+        // If a chat is in progress, treat Stop as a cancel for chat
+        if (_isChatBusy)
         {
-            await _foundryService.UnloadModelAsync(_currentModel);
+            _chatCts?.Cancel();
+            return;
         }
-        UpdateStatus("Stopped");
-        TxtServiceUrl.Text = "";
-        LblHealth.Text = "";
+
+        // Otherwise, Stop should NOT unload the model or stop the service.
+        // Just clear any progress UI and set a neutral status.
         HideProgress();
+        UpdateStatus("Idle");
     }
 
     private async void BtnRefreshModels_Click(object sender, RoutedEventArgs e)
