@@ -6,6 +6,7 @@ public class ChatThreadEntity
 {
     public Guid Id { get; set; }
     public string Title { get; set; } = "New Chat";
+    public string? ThreadInstructions { get; set; }
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedUtc { get; set; } = DateTime.UtcNow;
 }

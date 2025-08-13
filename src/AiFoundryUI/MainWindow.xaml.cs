@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     private System.Threading.CancellationTokenSource? _chatCts;
     private System.Threading.CancellationTokenSource? _opCts; // for non-chat operations
     private bool _suppressAutoLoad = false; // avoid auto-loading on programmatic selection
+    private bool _threadHasInstructions = false; // cache flag to show/hide toggle
 
     // Persistence-backed threads
     private readonly List<ChatThreadEntity> _threads = new();
@@ -145,6 +146,85 @@ public partial class MainWindow : Window
         // This method is no longer needed with the new FoundryService architecture
         // The FoundryService handles all CLI output processing internally
     Logger.Log($"Legacy OnProcessOutput called: {output}");
+    }
+
+    // ===== Thread Instructions UI Handlers =====
+    private async void BtnEditThreadInstructions_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeThread == null)
+        {
+            MessageBox.Show("Create or select a thread first.");
+            return;
+        }
+        try
+        {
+            var existing = _activeThread.ThreadInstructions;
+            if (existing == null)
+            {
+                // Fetch from repo in case of stale in-memory
+                existing = await _threadsRepo.GetThreadInstructionsAsync(_activeThread.Id);
+            }
+            TxtThreadInstructions.Text = existing ?? string.Empty;
+            ThreadInstructionsPanel.Visibility = Visibility.Visible;
+            _threadHasInstructions = !string.IsNullOrWhiteSpace(existing);
+            ChkUseDefaultInstructions.Visibility = _threadHasInstructions ? Visibility.Visible : Visibility.Collapsed;
+            if (_threadHasInstructions)
+                ChkUseDefaultInstructions.IsChecked = true; // default combine on first display
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Failed to load thread instructions: " + ex.Message);
+        }
+    }
+
+    private async void BtnSaveThreadInstructions_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeThread == null) return;
+        var text = TxtThreadInstructions.Text?.Trim() ?? string.Empty;
+        try
+        {
+            await _threadsRepo.UpdateThreadInstructionsAsync(_activeThread.Id, string.IsNullOrWhiteSpace(text) ? null : text);
+            _activeThread.ThreadInstructions = string.IsNullOrWhiteSpace(text) ? null : text;
+            _threadHasInstructions = !string.IsNullOrWhiteSpace(_activeThread.ThreadInstructions);
+            ThreadInstructionsPanel.Visibility = Visibility.Collapsed;
+            UpdateThreadInstructionUIState();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Failed to save thread instructions: " + ex.Message);
+        }
+    }
+
+    private void BtnCloseThreadInstructions_Click(object sender, RoutedEventArgs e)
+    {
+        ThreadInstructionsPanel.Visibility = Visibility.Collapsed;
+        UpdateThreadInstructionUIState();
+    }
+
+    private void UpdateThreadInstructionUIState()
+    {
+        _threadHasInstructions = !string.IsNullOrWhiteSpace(_activeThread?.ThreadInstructions);
+        ChkUseDefaultInstructions.Visibility = _threadHasInstructions ? Visibility.Visible : Visibility.Collapsed;
+        if (!_threadHasInstructions)
+        {
+            ChkUseDefaultInstructions.IsChecked = true; // irrelevant when hidden, but keep default true
+        }
+    }
+
+    private string BuildSystemInstructions()
+    {
+        var defaultInstr = _config.DefaultInstructions?.Trim();
+        var threadInstr = _activeThread?.ThreadInstructions?.Trim();
+        if (!string.IsNullOrWhiteSpace(threadInstr))
+        {
+            var useDefault = ChkUseDefaultInstructions.IsChecked == true;
+            if (useDefault && !string.IsNullOrWhiteSpace(defaultInstr))
+                return defaultInstr + "\n\n" + threadInstr;
+            return threadInstr;
+        }
+        // No thread instructions; fallback to default or minimal
+        if (!string.IsNullOrWhiteSpace(defaultInstr)) return defaultInstr;
+        return "You are a helpful assistant.";
     }
 
     private void ParseAndDisplayProgress(string output)
@@ -725,7 +805,12 @@ public partial class MainWindow : Window
         AppendChat("You", prompt);
         TxtPrompt.Clear();
 
-        _messages.Add(new ChatMessage { Role = "user", Content = prompt });
+    // Compose the system message from global and/or thread instructions
+    var systemText = BuildSystemInstructions();
+    var staged = new List<ChatMessage>();
+    staged.Add(new ChatMessage { Role = "system", Content = systemText });
+    staged.AddRange(_messages.Where(m => m.Role != "system"));
+    staged.Add(new ChatMessage { Role = "user", Content = prompt });
         if (_activeThread != null)
         {
             await _threadsRepo.AddMessageAsync(_activeThread.Id, "user", prompt);
@@ -740,7 +825,7 @@ public partial class MainWindow : Window
                 Logger.Log($"Sending chat request with model alias: '{model}'");
                 var temp = (float)SldTemp.Value;
                 _chatCts = new System.Threading.CancellationTokenSource();
-                reply = await _chat.SendChatAsync(model, _messages, temp, _chatCts.Token);
+                reply = await _chat.SendChatAsync(model, staged, temp, _chatCts.Token);
             }
             else
             {
@@ -944,21 +1029,9 @@ public partial class MainWindow : Window
 
     private void BtnOpenConfig_Click(object sender, RoutedEventArgs e)
     {
-        try
-        {
-            var path = Config.FilePath;
-            if (!System.IO.File.Exists(path)) Config.Save(_config);
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "notepad.exe",
-                ArgumentList = { path },
-                UseShellExecute = false
-            });
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show("Failed to open config: " + ex.Message);
-        }
+    // Open Settings window to edit Default Instructions
+    var win = new SettingsWindow(_config) { Owner = this };
+    win.ShowDialog();
     }
 
     // ===== SERVICE MANAGEMENT HANDLERS =====
@@ -1374,6 +1447,27 @@ public partial class MainWindow : Window
             catch (Exception ex)
             {
                 MessageBox.Show("Failed to delete thread: " + ex.Message);
+            }
+        }
+    }
+
+    private async void BtnThreadInstructions_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.DataContext is ChatThreadEntity thread)
+        {
+            _activeThread = thread;
+            try
+            {
+                var existing = thread.ThreadInstructions ?? await _threadsRepo.GetThreadInstructionsAsync(thread.Id);
+                TxtThreadInstructions.Text = existing ?? string.Empty;
+                ThreadInstructionsPanel.Visibility = Visibility.Visible;
+                _threadHasInstructions = !string.IsNullOrWhiteSpace(existing);
+                ChkUseDefaultInstructions.Visibility = _threadHasInstructions ? Visibility.Visible : Visibility.Collapsed;
+                if (_threadHasInstructions) ChkUseDefaultInstructions.IsChecked = true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Failed to open thread instructions: " + ex.Message);
             }
         }
     }

@@ -36,6 +36,7 @@ public class ThreadsRepository
 CREATE TABLE IF NOT EXISTS Threads (
   Id TEXT PRIMARY KEY,
   Title TEXT NOT NULL,
+    ThreadInstructions TEXT,
   CreatedUtc TEXT NOT NULL,
   UpdatedUtc TEXT NOT NULL
 );
@@ -57,8 +58,29 @@ CREATE INDEX IF NOT EXISTS IX_Messages_ThreadId ON Messages(ThreadId);
         var result = new List<ChatThreadEntity>();
         await using var conn = CreateConnection();
         await conn.OpenAsync();
+        // Ensure legacy DBs have the ThreadInstructions column
+        try
+        {
+            var ensure = conn.CreateCommand();
+            ensure.CommandText = "PRAGMA table_info(Threads)";
+            var cols = new List<string>();
+            await using (var rdr = await ensure.ExecuteReaderAsync())
+            {
+                while (await rdr.ReadAsync())
+                {
+                    cols.Add(rdr.GetString(1));
+                }
+            }
+            if (!cols.Contains("ThreadInstructions"))
+            {
+                var alter = conn.CreateCommand();
+                alter.CommandText = "ALTER TABLE Threads ADD COLUMN ThreadInstructions TEXT";
+                await alter.ExecuteNonQueryAsync();
+            }
+        }
+        catch { /* best-effort */ }
         var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT Id, Title, CreatedUtc, UpdatedUtc FROM Threads ORDER BY datetime(UpdatedUtc) DESC";
+        cmd.CommandText = "SELECT Id, Title, ThreadInstructions, CreatedUtc, UpdatedUtc FROM Threads ORDER BY datetime(UpdatedUtc) DESC";
         await using var reader = await cmd.ExecuteReaderAsync();
         while (await reader.ReadAsync())
         {
@@ -66,8 +88,9 @@ CREATE INDEX IF NOT EXISTS IX_Messages_ThreadId ON Messages(ThreadId);
             {
                 Id = Guid.Parse(reader.GetString(0)),
                 Title = reader.GetString(1),
-                CreatedUtc = DateTime.Parse(reader.GetString(2)),
-                UpdatedUtc = DateTime.Parse(reader.GetString(3))
+                ThreadInstructions = reader.IsDBNull(2) ? null : reader.GetString(2),
+                CreatedUtc = DateTime.Parse(reader.GetString(3)),
+                UpdatedUtc = DateTime.Parse(reader.GetString(4))
             });
         }
         return result;
@@ -103,9 +126,10 @@ CREATE INDEX IF NOT EXISTS IX_Messages_ThreadId ON Messages(ThreadId);
         await using var conn = CreateConnection();
         await conn.OpenAsync();
         var cmd = conn.CreateCommand();
-        cmd.CommandText = "INSERT INTO Threads(Id, Title, CreatedUtc, UpdatedUtc) VALUES ($id, $title, $c, $u)";
+    cmd.CommandText = "INSERT INTO Threads(Id, Title, ThreadInstructions, CreatedUtc, UpdatedUtc) VALUES ($id, $title, $ti, $c, $u)";
         cmd.Parameters.AddWithValue("$id", id.ToString());
         cmd.Parameters.AddWithValue("$title", title);
+    cmd.Parameters.AddWithValue("$ti", DBNull.Value);
         cmd.Parameters.AddWithValue("$c", now.ToString("o"));
         cmd.Parameters.AddWithValue("$u", now.ToString("o"));
         await cmd.ExecuteNonQueryAsync();
@@ -119,6 +143,32 @@ CREATE INDEX IF NOT EXISTS IX_Messages_ThreadId ON Messages(ThreadId);
         var cmd = conn.CreateCommand();
         cmd.CommandText = "UPDATE Threads SET Title = $title, UpdatedUtc = $u WHERE Id = $id";
         cmd.Parameters.AddWithValue("$title", title);
+        cmd.Parameters.AddWithValue("$u", DateTime.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("$id", id.ToString());
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    public async Task<string?> GetThreadInstructionsAsync(Guid id)
+    {
+        await using var conn = CreateConnection();
+        await conn.OpenAsync();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT ThreadInstructions FROM Threads WHERE Id = $id";
+        cmd.Parameters.AddWithValue("$id", id.ToString());
+        var result = await cmd.ExecuteScalarAsync();
+        return result == null || result == DBNull.Value ? null : (string)result;
+    }
+
+    public async Task UpdateThreadInstructionsAsync(Guid id, string? instructions)
+    {
+        await using var conn = CreateConnection();
+        await conn.OpenAsync();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Threads SET ThreadInstructions = $ti, UpdatedUtc = $u WHERE Id = $id";
+        if (string.IsNullOrWhiteSpace(instructions))
+            cmd.Parameters.AddWithValue("$ti", DBNull.Value);
+        else
+            cmd.Parameters.AddWithValue("$ti", instructions);
         cmd.Parameters.AddWithValue("$u", DateTime.UtcNow.ToString("o"));
         cmd.Parameters.AddWithValue("$id", id.ToString());
         await cmd.ExecuteNonQueryAsync();

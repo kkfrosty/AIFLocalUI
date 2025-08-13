@@ -26,6 +26,9 @@ public class Config
 
     public double DefaultTemperature { get; set; } = 0.7;
 
+    // Global default system instructions applied when a thread has none
+    public string DefaultInstructions { get; set; } = "";
+
     public static Config LoadOrCreate()
     {
         try

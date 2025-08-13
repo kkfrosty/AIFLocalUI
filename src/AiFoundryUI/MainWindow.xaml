@@ -94,9 +94,31 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Text="{Binding Title}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                                    <Button Grid.Column="1"
+                                    <!-- Thread instructions icon with badge -->
+                                    <Grid Grid.Column="1" Margin="6,0,0,0" Width="24" Height="24">
+                                        <Button x:Name="BtnThreadInstructions"
+                                                Content="🧭"
+                                                ToolTip="Edit thread instructions"
+                                                Width="24" Height="24"
+                                                Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"
+                                                Click="BtnThreadInstructions_Click"/>
+                                        <Ellipse Width="6" Height="6" Fill="#10B981" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,0,0,0" Visibility="Visible">
+                                            <Ellipse.Style>
+                                                <Style TargetType="Ellipse">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding ThreadInstructions}" Value="{x:Null}">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Ellipse.Style>
+                                        </Ellipse>
+                                    </Grid>
+                                    <Button Grid.Column="2"
                                             Content="🗑"
                                             ToolTip="Delete thread"
                                             Width="24" Height="24"
@@ -131,7 +153,7 @@
             </StackPanel>
         </Grid>
 
-        <!-- Chat input area -->
+    <!-- Chat input area -->
     <Border Grid.Row="2" Grid.Column="1" Background="White" BorderBrush="#E1E5E9" BorderThickness="0,1,0,0" Padding="20,16">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -140,18 +162,38 @@
                 </Grid.ColumnDefinitions>
                 
                 <Border Grid.Column="0" Background="#F9FAFB" BorderBrush="#D1D5DB" BorderThickness="1" CornerRadius="8" Padding="12">
-                    <TextBox x:Name="TxtPrompt" 
-                             Background="Transparent" 
-                             BorderThickness="0" 
-                             TextWrapping="Wrap" 
-                             AcceptsReturn="True"
-                             MaxHeight="120"
-                             VerticalScrollBarVisibility="Auto"
-                             Text="Type your message here..." 
-                             Foreground="#9CA3AF"
-                             GotFocus="TxtPrompt_GotFocus"
-                             LostFocus="TxtPrompt_LostFocus"
-                             KeyDown="TxtPrompt_KeyDown"/>
+            <DockPanel LastChildFill="True">
+            <!-- Instructions icon -->
+            <Button x:Name="BtnEditThreadInstructions"
+                DockPanel.Dock="Left"
+                Content="🧭"
+                ToolTip="Add Thread Instructions"
+                Width="28" Height="28"
+                Margin="0,0,8,0"
+                Click="BtnEditThreadInstructions_Click"
+                Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"/>
+            <!-- Use default toggle, only shown when thread instructions exist -->
+            <CheckBox x:Name="ChkUseDefaultInstructions"
+                  DockPanel.Dock="Left"
+                  Content="Use Default"
+                  Margin="0,0,8,0"
+                  VerticalAlignment="Center"
+                  Visibility="Collapsed"
+                  IsChecked="True"/>
+            <!-- Prompt input -->
+            <TextBox x:Name="TxtPrompt" 
+                 Background="Transparent" 
+                 BorderThickness="0" 
+                 TextWrapping="Wrap" 
+                 AcceptsReturn="True"
+                 MaxHeight="120"
+                 VerticalScrollBarVisibility="Auto"
+                 Text="Type your message here..." 
+                 Foreground="#9CA3AF"
+                 GotFocus="TxtPrompt_GotFocus"
+                 LostFocus="TxtPrompt_LostFocus"
+                 KeyDown="TxtPrompt_KeyDown"/>
+            </DockPanel>
                 </Border>
                 
                 <Button x:Name="BtnSend" 
@@ -165,6 +207,24 @@
                         FontWeight="Medium"
                         Click="BtnSend_Click"/>
             </Grid>
+        </Border>
+
+        <!-- Collapsible inline editor for Thread Instructions -->
+        <Border Grid.Row="2" Grid.Column="1" Background="#FFFFFF" BorderBrush="#E5E7EB" BorderThickness="0,0,0,1" Padding="20,0" Margin="0,80,0,0">
+            <StackPanel>
+                <StackPanel x:Name="ThreadInstructionsPanel" Visibility="Collapsed" Background="#F9FAFB" Margin="0,8,0,0" Orientation="Vertical">
+                    <Border Padding="12" Background="Transparent">
+                        <StackPanel Orientation="Vertical">
+                            <TextBlock Text="Thread Instructions" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                            <TextBox x:Name="TxtThreadInstructions" TextWrapping="Wrap" AcceptsReturn="True" Height="80"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                                <Button x:Name="BtnSaveThreadInstructions" Content="Save" Margin="0,0,8,0" Padding="12,4" Click="BtnSaveThreadInstructions_Click"/>
+                                <Button x:Name="BtnCloseThreadInstructions" Content="Close" Padding="12,4" Click="BtnCloseThreadInstructions_Click"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </StackPanel>
         </Border>
 
         <!-- Model management section (separate from service) -->
