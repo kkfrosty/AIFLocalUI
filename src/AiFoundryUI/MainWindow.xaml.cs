@@ -1242,6 +1242,48 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void BtnDeleteThread_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.DataContext is ChatThreadEntity thread)
+        {
+            var confirm = MessageBox.Show($"Delete thread '{thread.Title}'? This cannot be undone.", "Delete Thread", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (confirm != MessageBoxResult.Yes) return;
+
+            try
+            {
+                await _threadsRepo.DeleteThreadAsync(thread.Id);
+                // Remove from in-memory list
+                var wasActive = _activeThread?.Id == thread.Id;
+                _threads.RemoveAll(t => t.Id == thread.Id);
+
+                // Decide next active thread
+                if (_threads.Count == 0)
+                {
+                    // Create a new default thread so UI is never empty
+                    var id = await _threadsRepo.CreateThreadAsync("New Chat");
+                    await _threadsRepo.AddMessageAsync(id, "system", "You are a helpful assistant.");
+                    var newThread = new ChatThreadEntity { Id = id, Title = "New Chat", CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow };
+                    _threads.Add(newThread);
+                    _activeThread = newThread;
+                }
+                else if (wasActive)
+                {
+                    _activeThread = _threads.OrderByDescending(t => t.UpdatedUtc).FirstOrDefault();
+                }
+
+                RefreshThreadListPreserveSelection();
+                if (_activeThread != null)
+                {
+                    await LoadThreadIntoUIAsync(_activeThread);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Failed to delete thread: " + ex.Message);
+            }
+        }
+    }
+
     private async Task LoadThreadIntoUIAsync(ChatThreadEntity thread)
     {
         ChatMessages.Children.Clear();

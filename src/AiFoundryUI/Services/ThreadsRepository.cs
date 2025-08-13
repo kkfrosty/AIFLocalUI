@@ -14,8 +14,8 @@ public class ThreadsRepository
     public ThreadsRepository()
     {
         // Place portable DB next to the executable for zero-setup usage
-        var baseDir = AppContext.BaseDirectory;
-        _dbPath = Path.Combine(baseDir, "threads.db");
+    var baseDir = AppContext.BaseDirectory;
+    _dbPath = Path.Combine(baseDir, "aifLocal.db");
     }
 
     private SqliteConnection CreateConnection()
@@ -149,5 +149,26 @@ CREATE INDEX IF NOT EXISTS IX_Messages_ThreadId ON Messages(ThreadId);
         // Touch thread on new message
         await TouchThreadAsync(threadId);
         return (result is long l) ? l : Convert.ToInt64(result);
+    }
+
+    public async Task DeleteThreadAsync(Guid threadId)
+    {
+        await using var conn = CreateConnection();
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+        // Explicitly delete messages first to avoid relying on PRAGMA foreign_keys
+        var delMsgs = conn.CreateCommand();
+        delMsgs.Transaction = tx as Microsoft.Data.Sqlite.SqliteTransaction;
+        delMsgs.CommandText = "DELETE FROM Messages WHERE ThreadId = $tid";
+        delMsgs.Parameters.AddWithValue("$tid", threadId.ToString());
+        await delMsgs.ExecuteNonQueryAsync();
+
+        var delThread = conn.CreateCommand();
+        delThread.Transaction = tx as Microsoft.Data.Sqlite.SqliteTransaction;
+        delThread.CommandText = "DELETE FROM Threads WHERE Id = $id";
+        delThread.Parameters.AddWithValue("$id", threadId.ToString());
+        await delThread.ExecuteNonQueryAsync();
+
+        await tx.CommitAsync();
     }
 }
