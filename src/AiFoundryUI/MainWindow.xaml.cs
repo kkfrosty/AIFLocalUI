@@ -6,6 +6,7 @@ using AiFoundryUI.Models;
 using AiFoundryUI.Services;
 using System.Linq;
 using System.Threading.Tasks;
+using Markdig;
 
 namespace AiFoundryUI;
 
@@ -149,6 +150,24 @@ public partial class MainWindow : Window
     }
 
     // ===== Thread Instructions UI Handlers =====
+    private void ThreadInstructionsTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ThreadInstructionsPanel.Visibility != Visibility.Visible) return;
+        if (ThreadInstructionsTabs.SelectedItem is TabItem ti && ti.Header?.ToString() == "Preview")
+        {
+            try
+            {
+                var md = TxtThreadInstructions.Text ?? string.Empty;
+                var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+                var html = Markdown.ToHtml(md, pipeline);
+                // Simple doc wrapper for WebBrowser
+                var doc = "<html><head><meta charset='utf-8'><style>body{font-family:Segoe UI, Arial; padding:12px;} pre{background:#f6f8fa;padding:8px;border-radius:4px;} code{font-family:Consolas, monospace;} h1,h2,h3{margin-top:1em;} </style></head><body>" + html + "</body></html>";
+                MdPreview.NavigateToString(doc);
+            }
+            catch { /* ignore preview errors */ }
+        }
+    }
+
     private async void BtnEditThreadInstructions_Click(object sender, RoutedEventArgs e)
     {
         if (_activeThread == null)
@@ -161,15 +180,15 @@ public partial class MainWindow : Window
             var existing = _activeThread.ThreadInstructions;
             if (existing == null)
             {
-                // Fetch from repo in case of stale in-memory
                 existing = await _threadsRepo.GetThreadInstructionsAsync(_activeThread.Id);
             }
             TxtThreadInstructions.Text = existing ?? string.Empty;
             ThreadInstructionsPanel.Visibility = Visibility.Visible;
             _threadHasInstructions = !string.IsNullOrWhiteSpace(existing);
+            // Per request: default is unchecked when a conversation prompt exists
             ChkUseDefaultInstructions.Visibility = _threadHasInstructions ? Visibility.Visible : Visibility.Collapsed;
             if (_threadHasInstructions)
-                ChkUseDefaultInstructions.IsChecked = true; // default combine on first display
+                ChkUseDefaultInstructions.IsChecked = false; 
         }
         catch (Exception ex)
         {
@@ -207,11 +226,12 @@ public partial class MainWindow : Window
         ChkUseDefaultInstructions.Visibility = _threadHasInstructions ? Visibility.Visible : Visibility.Collapsed;
         if (!_threadHasInstructions)
         {
-            ChkUseDefaultInstructions.IsChecked = true; // irrelevant when hidden, but keep default true
+            // Hidden when no thread prompt; combine is irrelevant
+            ChkUseDefaultInstructions.IsChecked = false;
         }
     }
 
-    private string BuildSystemInstructions()
+    private string? BuildSystemInstructions()
     {
         var defaultInstr = _config.DefaultInstructions?.Trim();
         var threadInstr = _activeThread?.ThreadInstructions?.Trim();
@@ -222,9 +242,9 @@ public partial class MainWindow : Window
                 return defaultInstr + "\n\n" + threadInstr;
             return threadInstr;
         }
-        // No thread instructions; fallback to default or minimal
+        // No thread instructions; include global if present, otherwise no system message
         if (!string.IsNullOrWhiteSpace(defaultInstr)) return defaultInstr;
-        return "You are a helpful assistant.";
+        return null;
     }
 
     private void ParseAndDisplayProgress(string output)
@@ -808,7 +828,9 @@ public partial class MainWindow : Window
     // Compose the system message from global and/or thread instructions
     var systemText = BuildSystemInstructions();
     var staged = new List<ChatMessage>();
-    staged.Add(new ChatMessage { Role = "system", Content = systemText });
+    if (!string.IsNullOrWhiteSpace(systemText))
+        staged.Add(new ChatMessage { Role = "system", Content = systemText! });
+    // Only include prior non-system chat to avoid duplicate system entries
     staged.AddRange(_messages.Where(m => m.Role != "system"));
     staged.Add(new ChatMessage { Role = "user", Content = prompt });
         if (_activeThread != null)
@@ -1348,23 +1370,18 @@ public partial class MainWindow : Window
         var existing = await _threadsRepo.GetThreadsAsync();
         _threads.Clear();
         _threads.AddRange(existing);
+        // If there are no threads, create an initial one (unselected)
         if (_threads.Count == 0)
         {
-            // Create initial thread with a system primer message
             var id = await _threadsRepo.CreateThreadAsync("New Chat");
             await _threadsRepo.AddMessageAsync(id, "system", "You are a helpful assistant.");
             _threads.Add(new ChatThreadEntity { Id = id, Title = "New Chat", CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow });
         }
-        _activeThread = _threads.OrderByDescending(t=>t.UpdatedUtc).FirstOrDefault();
-        LstThreads.ItemsSource = null;
-        LstThreads.ItemsSource = _threads.OrderByDescending(t=>t.UpdatedUtc).ToList();
-        if (_activeThread != null)
-            LstThreads.SelectedItem = _activeThread;
-        // Load messages for active thread into UI
-        if (_activeThread != null)
-        {
-            await LoadThreadIntoUIAsync(_activeThread);
-        }
+        // Populate list without auto-selecting last thread; user chooses a thread explicitly
+    _activeThread = null;
+    LstThreads.ItemsSource = null;
+    LstThreads.ItemsSource = _threads.OrderByDescending(t=>t.UpdatedUtc).ToList();
+    // Do not call LoadThreadIntoUIAsync here; keep Welcome panel until user selects/creates a thread
     }
 
     private void RefreshThreadListPreserveSelection()
@@ -1463,7 +1480,7 @@ public partial class MainWindow : Window
                 ThreadInstructionsPanel.Visibility = Visibility.Visible;
                 _threadHasInstructions = !string.IsNullOrWhiteSpace(existing);
                 ChkUseDefaultInstructions.Visibility = _threadHasInstructions ? Visibility.Visible : Visibility.Collapsed;
-                if (_threadHasInstructions) ChkUseDefaultInstructions.IsChecked = true;
+                if (_threadHasInstructions) ChkUseDefaultInstructions.IsChecked = false;
             }
             catch (Exception ex)
             {

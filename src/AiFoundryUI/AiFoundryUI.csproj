@@ -20,6 +20,7 @@
   <ItemGroup>
     <PackageReference Include="System.Management" Version="8.0.0" />
   <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.6" />
+  <PackageReference Include="Markdig" Version="0.37.0" />
   </ItemGroup>
 
 </Project>
