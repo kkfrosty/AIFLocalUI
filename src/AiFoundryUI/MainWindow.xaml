@@ -170,21 +170,21 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 
-                <Border Grid.Column="0" Background="#F9FAFB" BorderBrush="#D1D5DB" BorderThickness="1" CornerRadius="8" Padding="12">
-                    <DockPanel LastChildFill="True">
-                        <!-- Instructions icon -->
-                        <Button x:Name="BtnEditThreadInstructions"
-                                DockPanel.Dock="Left"
-                                ToolTip="Edit thread instructions"
-                                Width="28" Height="28"
-                                Margin="0,0,8,0"
-                                Click="BtnEditThreadInstructions_Click"
-                                Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}">
-                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE70F;" FontSize="14" VerticalAlignment="Center" HorizontalAlignment="Center"/>
-                        </Button>
+                <StackPanel Grid.Column="0">
+                    <Border Background="#F9FAFB" BorderBrush="#D1D5DB" BorderThickness="1" CornerRadius="8" Padding="12">
+                        <DockPanel LastChildFill="True">
+                            <!-- Instructions icon -->
+                            <Button x:Name="BtnEditThreadInstructions"
+                                    DockPanel.Dock="Left"
+                                    ToolTip="Edit thread instructions"
+                                    Width="28" Height="28"
+                                    Margin="0,0,8,0"
+                                    Click="BtnEditThreadInstructions_Click"
+                                    Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}">
+                                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE70F;" FontSize="14" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                            </Button>
 
-                        <!-- Prompt input and toggle below -->
-                        <StackPanel Orientation="Vertical">
+                            <!-- Prompt input -->
                             <TextBox x:Name="TxtPrompt"
                                      Background="Transparent"
                                      BorderThickness="0"
@@ -197,18 +197,18 @@
                                      GotFocus="TxtPrompt_GotFocus"
                                      LostFocus="TxtPrompt_LostFocus"
                                      KeyDown="TxtPrompt_KeyDown"/>
-                            <!-- Global default toggle under the textbox; shown only when thread instructions exist -->
-                            <CheckBox x:Name="ChkUseDefaultInstructions"
-                                      Content="Enable global prompt"
-                                      Margin="2,6,0,0"
-                                      VerticalAlignment="Top"
-                                      Visibility="Collapsed"
-                                      IsChecked="False"
-                                      FontSize="11"
-                                      Foreground="#6B7280"/>
-                        </StackPanel>
-                    </DockPanel>
-                </Border>
+                        </DockPanel>
+                    </Border>
+                    <!-- Global default toggle under the textbox; shown only when thread instructions exist -->
+                    <CheckBox x:Name="ChkUseDefaultInstructions"
+                              Content="Enable global prompt"
+                              Margin="4,6,0,0"
+                              VerticalAlignment="Top"
+                              Visibility="Collapsed"
+                              IsChecked="False"
+                              FontSize="11"
+                              Foreground="#6B7280"/>
+                </StackPanel>
                 
                 <Button x:Name="BtnSend" 
                         Grid.Column="1" 

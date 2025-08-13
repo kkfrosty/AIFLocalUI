@@ -9,7 +9,18 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <TextBlock Text="Default Instructions" FontWeight="SemiBold" Margin="0,0,0,6"/>
-        <TextBox x:Name="TxtDefaultInstructions" Grid.Row="1" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"/>
+        <StackPanel Grid.Row="1">
+            <Border Background="#F3F4F6" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,8">
+                <StackPanel>
+                    <TextBlock Text="Describe what you want the global prompt to do" Margin="0,0,0,6"/>
+                    <TextBox x:Name="TxtGlobalPromptIdea" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="48" VerticalScrollBarVisibility="Auto"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <Button x:Name="BtnGenerateGlobalPrompt" Content="Generate with AI" Padding="12,4" Click="BtnGenerateGlobalPrompt_Click"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+            <TextBox x:Name="TxtDefaultInstructions" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" MinHeight="160"/>
+        </StackPanel>
         <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
             <Button Content="Save" Padding="16,6" Margin="0,0,8,0" Click="BtnSave_Click"/>
             <Button Content="Cancel" Padding="16,6" Click="BtnCancel_Click"/>

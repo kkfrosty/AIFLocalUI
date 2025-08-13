@@ -7,6 +7,7 @@ using AiFoundryUI.Services;
 using System.Linq;
 using System.Threading.Tasks;
 using Markdig;
+using System.Collections.Generic;
 
 namespace AiFoundryUI;
 
@@ -980,6 +981,30 @@ public partial class MainWindow : Window
         }
     }
 
+    // Shared generator used by Settings and thread editor
+    private async System.Threading.Tasks.Task<string> GenerateSystemPromptFromIdeaAsync(string idea)
+    {
+        var cleaned = idea?.Trim();
+        if (string.IsNullOrWhiteSpace(cleaned)) return string.Empty;
+        var model = CmbModels.SelectedItem as string ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(model)) throw new InvalidOperationException("Select a model first to generate.");
+
+        var ok = await EnsureModelLoadedAsync(model);
+        if (!ok) throw new InvalidOperationException("Model is not ready for generation.");
+
+        var sys = "You are a prompt engineer. Generate a single high-quality system prompt in Markdown for a chat assistant based on the user's idea.\n" +
+                  "Goals:\n- Be specific, concise, and role-appropriate.\n- Include guidance on tone, formatting, and constraints.\n- Use sections with Markdown headings (## Role, ## Goals, ## Style, ## Constraints, ## Tools if relevant).\n- Avoid placeholders except where needed (like {project_name}).\n- Do not include analysis of your reasoning; only output the final prompt.";
+        var user = $"User idea for the prompt:\n\n{cleaned}\n\nPlease output only the final Markdown system prompt. Do not add commentary.";
+        var messages = new List<ChatMessage>
+        {
+            new ChatMessage{ Role = "system", Content = sys },
+            new ChatMessage{ Role = "user", Content = user }
+        };
+        var temp = 0.5f;
+        var draft = await _chat.SendChatAsync(model, messages, temp);
+        return draft?.Trim() ?? string.Empty;
+    }
+
     private void AppendChat(string who, string text)
     {
         Dispatcher.Invoke(() =>
@@ -1052,7 +1077,7 @@ public partial class MainWindow : Window
     private void BtnOpenConfig_Click(object sender, RoutedEventArgs e)
     {
     // Open Settings window to edit Default Instructions
-    var win = new SettingsWindow(_config) { Owner = this };
+    var win = new SettingsWindow(_config, GenerateSystemPromptFromIdeaAsync) { Owner = this };
     win.ShowDialog();
     }
 
@@ -1533,35 +1558,13 @@ public partial class MainWindow : Window
             MessageBox.Show("Type what you want this prompt to achieve.");
             return;
         }
-        var model = CmbModels.SelectedItem as string ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(model))
-        {
-            MessageBox.Show("Select a model first to generate.");
-            return;
-        }
-        // Ensure model is ready
         EnterBusyState("Generating prompt...");
         try
         {
-            var ok = await EnsureModelLoadedAsync(model);
-            if (!ok)
-            {
-                AppendChat("Error", "Model is not ready for generation.");
-                return;
-            }
-            var sys = "You are a prompt engineer. Generate a single high-quality system prompt in Markdown for a chat assistant based on the user's idea.\n" +
-                      "Goals:\n- Be specific, concise, and role-appropriate.\n- Include guidance on tone, formatting, and constraints.\n- Use sections with Markdown headings (## Role, ## Goals, ## Style, ## Constraints, ## Tools if relevant).\n- Avoid placeholders except where needed (like {project_name}).\n- Do not include analysis of your reasoning; only output the final prompt.";
-            var user = $"User idea for the prompt:\n\n{idea}\n\nPlease output only the final Markdown system prompt. Do not add commentary.";
-            var messages = new List<ChatMessage>
-            {
-                new ChatMessage{ Role = "system", Content = sys },
-                new ChatMessage{ Role = "user", Content = user }
-            };
-            var temp = 0.5f;
-            var draft = await _chat.SendChatAsync(model, messages, temp);
+            var draft = await GenerateSystemPromptFromIdeaAsync(idea);
             if (!string.IsNullOrWhiteSpace(draft))
             {
-                TxtThreadInstructions.Text = draft.Trim();
+                TxtThreadInstructions.Text = draft;
                 ThreadInstructionsTabs.SelectedIndex = 1; // switch to Preview
                 // Trigger preview render
                 ThreadInstructionsTabs_SelectionChanged(ThreadInstructionsTabs, new SelectionChangedEventArgs(TabControl.SelectionChangedEvent, new List<TabItem>(), new List<TabItem>()));
