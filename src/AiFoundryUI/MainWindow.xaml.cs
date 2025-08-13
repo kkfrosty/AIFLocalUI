@@ -5,6 +5,7 @@ using System.Windows.Media;
 using AiFoundryUI.Models;
 using AiFoundryUI.Services;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace AiFoundryUI;
 
@@ -29,18 +30,10 @@ public partial class MainWindow : Window
     private System.Threading.CancellationTokenSource? _chatCts;
     private System.Threading.CancellationTokenSource? _opCts; // for non-chat operations
 
-    // Simple in-memory thread model (will later move to persistence)
-    private class ChatThread
-    {
-        public Guid Id { get; set; } = Guid.NewGuid();
-        public string Title { get; set; } = "New Chat";
-        public List<ChatMessage> Messages { get; set; } = new();
-        public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
-        public DateTime UpdatedUtc { get; set; } = DateTime.UtcNow;
-        public override string ToString() => Title;
-    }
-    private readonly List<ChatThread> _threads = new();
-    private ChatThread? _activeThread;
+    // Persistence-backed threads
+    private readonly List<ChatThreadEntity> _threads = new();
+    private ChatThreadEntity? _activeThread;
+    private readonly ThreadsRepository _threadsRepo;
     private bool _isRefreshingThreads = false; // suppress selection reload side-effects
 
     public MainWindow()
@@ -50,6 +43,7 @@ public partial class MainWindow : Window
         _foundryService = new FoundryService(Log);
         _chat = new ChatClient(_config, _foundryService);
         _monitor = new SystemMonitor();
+    _threadsRepo = new ThreadsRepository();
 
         _monitor.MetricsUpdated += (_, m) =>
         {
@@ -81,7 +75,7 @@ public partial class MainWindow : Window
         // Setup temperature slider value display
         SldTemp.ValueChanged += (s, e) => LblTemp.Text = $"{e.NewValue:0.0}";
 
-    InitializeThreads();
+    _ = InitializeThreadsAsync();
     }
 
     // Event handlers for new UI elements
@@ -663,7 +657,10 @@ public partial class MainWindow : Window
         TxtPrompt.Clear();
 
         _messages.Add(new ChatMessage { Role = "user", Content = prompt });
-    _activeThread?.Messages.Add(new ChatMessage { Role = "user", Content = prompt });
+        if (_activeThread != null)
+        {
+            await _threadsRepo.AddMessageAsync(_activeThread.Id, "user", prompt);
+        }
         try
         {
             string reply;
@@ -680,9 +677,9 @@ public partial class MainWindow : Window
                 reply = "(openai_compatible is false; customize ChatClient for your API.)";
             }
             _messages.Add(new ChatMessage { Role = "assistant", Content = reply });
-            _activeThread?.Messages.Add(new ChatMessage { Role = "assistant", Content = reply });
             if (_activeThread != null)
             {
+                await _threadsRepo.AddMessageAsync(_activeThread.Id, "assistant", reply);
                 _activeThread.UpdatedUtc = DateTime.UtcNow;
                 RefreshThreadListPreserveSelection();
             }
@@ -835,11 +832,18 @@ public partial class MainWindow : Window
         if (_activeThread != null)
         {
             _activeThread.UpdatedUtc = DateTime.UtcNow;
-            if (who == "You" && _activeThread.Messages.Count == 0)
+            // If this is the first user message for the thread, set the title
+            if (who == "You")
             {
-                // Derive title from first user prompt (truncate)
-                _activeThread.Title = text.Length > 40 ? text.Substring(0, 40) + "…" : text;
-                RefreshThreadListPreserveSelection();
+                // Title only if this was the first non-system message
+                var existing = ChatMessages.Children.Count; // rough UI count; persisted check happens at repo write time
+                if (existing <= 2) // sender label + message roughly implies first exchange
+                {
+                    var newTitle = text.Length > 40 ? text.Substring(0, 40) + "…" : text;
+                    _activeThread.Title = newTitle;
+                    _ = _threadsRepo.UpdateThreadTitleAsync(_activeThread.Id, newTitle);
+                    RefreshThreadListPreserveSelection();
+                }
             }
         }
     }
@@ -1171,19 +1175,29 @@ public partial class MainWindow : Window
     }
 
     // ===== Thread Pane Logic =====
-    private void InitializeThreads()
+    private async Task InitializeThreadsAsync()
     {
-        // Create an initial thread
-        var initial = new ChatThread
+        await _threadsRepo.InitializeAsync();
+        var existing = await _threadsRepo.GetThreadsAsync();
+        _threads.Clear();
+        _threads.AddRange(existing);
+        if (_threads.Count == 0)
         {
-            Title = "New Chat",
-            Messages = new List<ChatMessage>{ new ChatMessage { Role="system", Content="You are a helpful assistant." } }
-        };
-        _threads.Add(initial);
-        _activeThread = initial;
+            // Create initial thread with a system primer message
+            var id = await _threadsRepo.CreateThreadAsync("New Chat");
+            await _threadsRepo.AddMessageAsync(id, "system", "You are a helpful assistant.");
+            _threads.Add(new ChatThreadEntity { Id = id, Title = "New Chat", CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow });
+        }
+        _activeThread = _threads.OrderByDescending(t=>t.UpdatedUtc).FirstOrDefault();
         LstThreads.ItemsSource = null;
         LstThreads.ItemsSource = _threads.OrderByDescending(t=>t.UpdatedUtc).ToList();
-        LstThreads.SelectedIndex = 0;
+        if (_activeThread != null)
+            LstThreads.SelectedItem = _activeThread;
+        // Load messages for active thread into UI
+        if (_activeThread != null)
+        {
+            await LoadThreadIntoUIAsync(_activeThread);
+        }
     }
 
     private void RefreshThreadListPreserveSelection()
@@ -1207,40 +1221,39 @@ public partial class MainWindow : Window
         }
     }
 
-    private void BtnNewThread_Click(object sender, RoutedEventArgs e)
+    private async void BtnNewThread_Click(object sender, RoutedEventArgs e)
     {
-        var thread = new ChatThread
-        {
-            Title = "New Chat",
-            Messages = new List<ChatMessage>{ new ChatMessage { Role="system", Content="You are a helpful assistant." } }
-        };
+        var id = await _threadsRepo.CreateThreadAsync("New Chat");
+        await _threadsRepo.AddMessageAsync(id, "system", "You are a helpful assistant.");
+        var thread = new ChatThreadEntity { Id = id, Title = "New Chat", CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow };
         _threads.Add(thread);
         _activeThread = thread;
         RefreshThreadListPreserveSelection();
-        LoadThreadIntoUI(thread);
+        await LoadThreadIntoUIAsync(thread);
     }
 
-    private void LstThreads_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void LstThreads_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
     if (_isRefreshingThreads) return; // suppress duplicate reload
-    if (LstThreads.SelectedItem is ChatThread ct)
+    if (LstThreads.SelectedItem is ChatThreadEntity ct)
         {
             _activeThread = ct;
-            LoadThreadIntoUI(ct);
+            await LoadThreadIntoUIAsync(ct);
         }
     }
 
-    private void LoadThreadIntoUI(ChatThread thread)
+    private async Task LoadThreadIntoUIAsync(ChatThreadEntity thread)
     {
         ChatMessages.Children.Clear();
-        foreach (var msg in thread.Messages.Where(m=> m.Role != "system"))
+        var messages = await _threadsRepo.GetMessagesAsync(thread.Id);
+        foreach (var msg in messages)
         {
+            if (msg.Role == "system") continue;
             var who = msg.Role == "assistant" ? "Assistant" : msg.Role == "user" ? "You" : msg.Role;
             AppendChat(who, msg.Content);
         }
-        // reset message list pointer
         _messages.Clear();
-        _messages.AddRange(thread.Messages);
+        _messages.AddRange(messages.Select(m => new ChatMessage { Role = m.Role, Content = m.Content }));
     }
 
     private void BtnToggleThreadPane_Click(object sender, RoutedEventArgs e)
