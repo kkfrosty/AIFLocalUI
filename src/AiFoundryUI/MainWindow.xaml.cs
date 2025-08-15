@@ -60,14 +60,27 @@ public partial class MainWindow : Window
                 LblMem.Text = $"{m.MemoryPercent:0}%";
                 PbDisk.Value = m.DiskPercent;
                 LblDisk.Text = $"{m.DiskPercent:0}%";
-                PbGpu.Value = m.GpuPercent;
-                LblGpu.Text = $"{m.GpuPercent:0}%";
-                if (!string.IsNullOrWhiteSpace(m.GpuName))
-                    LblGpuName.Text = m.GpuName;
-                if (m.GpuMemTotalMB > 0)
-                    LblGpuMem.Text = $"{m.GpuMemUsedMB:0} / {m.GpuMemTotalMB:0} MB";
+
+                // Multi-accelerator support
+                if (m.Accelerators != null && m.Accelerators.Count > 1)
+                {
+                    AcceleratorsItems.ItemsSource = m.Accelerators;
+                    AcceleratorsItems.Visibility = Visibility.Visible;
+                    SingleGpuPanel.Visibility = Visibility.Collapsed;
+                }
                 else
-                    LblGpuMem.Text = string.Empty;
+                {
+                    AcceleratorsItems.Visibility = Visibility.Collapsed;
+                    SingleGpuPanel.Visibility = Visibility.Visible;
+                    PbGpu.Value = m.GpuPercent;
+                    LblGpu.Text = $"{m.GpuPercent:0}%";
+                    if (!string.IsNullOrWhiteSpace(m.GpuName))
+                        LblGpuName.Text = m.GpuName;
+                    if (m.GpuMemTotalMB > 0)
+                        LblGpuMem.Text = $"{m.GpuMemUsedMB:0} / {m.GpuMemTotalMB:0} MB";
+                    else
+                        LblGpuMem.Text = string.Empty;
+                }
             });
         };
         _monitor.Start();

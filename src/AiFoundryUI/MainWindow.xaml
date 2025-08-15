@@ -355,12 +355,36 @@
                         <ProgressBar x:Name="PbDisk" Width="60" Height="8" Minimum="0" Maximum="100"/>
                         <TextBlock x:Name="LblDisk" Margin="6,0,0,0" FontSize="11" Foreground="#6B7280" Width="35"/>
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal">
+                    <!-- Legacy single GPU display (hidden when multiple accelerators) -->
+                    <StackPanel x:Name="SingleGpuPanel" Orientation="Horizontal">
                         <TextBlock x:Name="LblGpuName" Text="GPU" Margin="0,0,6,0" FontSize="11" Foreground="#6B7280"/>
                         <ProgressBar x:Name="PbGpu" Width="60" Height="8" Minimum="0" Maximum="100"/>
                         <TextBlock x:Name="LblGpu" Margin="6,0,0,0" FontSize="11" Foreground="#6B7280" Width="35"/>
                         <TextBlock x:Name="LblGpuMem" Margin="8,0,0,0" FontSize="11" Foreground="#6B7280"/>
                     </StackPanel>
+                    <!-- Multi-accelerator dynamic panel -->
+                    <ItemsControl x:Name="AcceleratorsItems" Margin="0,0,0,0" Visibility="Collapsed">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
+                                    <TextBlock Text="{Binding Name}" Margin="0,0,6,0" FontSize="11" Foreground="#6B7280"/>
+                                    <ProgressBar Width="60" Height="8" Minimum="0" Maximum="100" Value="{Binding UtilPercent}"/>
+                                    <TextBlock Text="{Binding UtilPercent, StringFormat={}{0:0}%}" Margin="6,0,0,0" FontSize="11" Foreground="#6B7280" Width="35"/>
+                                    <TextBlock Margin="8,0,0,0" FontSize="11" Foreground="#6B7280">
+                                        <Run Text="{Binding MemUsedGB, Mode=OneWay, StringFormat={}{0:0.0}}"/>
+                                        <Run Text=" / "/>
+                                        <Run Text="{Binding MemTotalGB, Mode=OneWay, StringFormat={}{0:0.0}}"/>
+                                        <Run Text=" GB"/>
+                                    </TextBlock>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                 </StackPanel>
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
